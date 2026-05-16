@@ -1,0 +1,16 @@
+[Unit]
+Description=Stock Digest Telegram Bot — long-running command handler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=USER
+WorkingDirectory=/home/USER/stock-digest
+ExecStart=/home/USER/stock-digest/.venv/bin/python main.py --bot
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

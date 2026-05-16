@@ -1,0 +1,62 @@
+import json
+import logging
+
+from src.config import AI_RELEVANCE_SCORE_THRESHOLD
+from src.gemini_client import generate
+from src.prompts import (
+    ANALYST_AGENT_SYSTEM,
+    EDITOR_AGENT_SYSTEM,
+    FILTER_AGENT_SYSTEM,
+    build_analyst_prompt,
+    build_editor_prompt,
+    build_filter_prompt,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def run_filter_agent(articles: list[dict]) -> list[dict]:
+    """
+    Ask Gemini to score each article 1-10 on market-moving impact.
+    Returns articles whose score meets AI_RELEVANCE_SCORE_THRESHOLD.
+    Falls back to passing all articles through if the response cannot be parsed.
+    """
+    if not articles:
+        return []
+
+    prompt = build_filter_prompt(articles)
+    raw = await generate(
+        prompt,
+        system_prompt=FILTER_AGENT_SYSTEM,
+        use_cache=False,
+        response_mime_type="application/json",
+    )
+
+    try:
+        scores: list[dict] = json.loads(raw)
+        high_impact = [
+            articles[item["index"]]
+            for item in scores
+            if item["score"] >= AI_RELEVANCE_SCORE_THRESHOLD
+            and 0 <= item["index"] < len(articles)
+        ]
+        logger.info(
+            "Filter agent: %d → %d articles (threshold=%d)",
+            len(articles), len(high_impact), AI_RELEVANCE_SCORE_THRESHOLD,
+        )
+        return high_impact if high_impact else articles
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.warning("Filter agent parse error (%s) — passing all articles through", exc)
+        return articles
+
+
+async def run_analyst_agent(articles: list[dict]) -> str:
+    """Generate structured plain-text market analysis from high-impact articles."""
+    prompt = build_analyst_prompt(articles)
+    return await generate(prompt, system_prompt=ANALYST_AGENT_SYSTEM, use_cache=False)
+
+
+async def run_editor_agent(analysis: str) -> str:
+    """Polish raw analysis into final Telegram HTML."""
+    prompt = build_editor_prompt(analysis)
+    return await generate(prompt, system_prompt=EDITOR_AGENT_SYSTEM, use_cache=False)

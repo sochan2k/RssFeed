@@ -1,0 +1,13 @@
+[Unit]
+Description=Stock Digest Timer — twice daily on US trading days
+
+[Timer]
+# Pre-market:  20:00 ICT (UTC+7) = 13:00 UTC  — before US open
+OnCalendar=Mon-Fri 13:00:00 UTC
+# Post-market: 05:00 ICT (UTC+7) = 22:00 UTC  — after US close
+OnCalendar=Mon-Fri 22:00:00 UTC
+# If a run was missed (Pi rebooted, etc.), fire immediately on next boot
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/pip index *)",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(.venv/Scripts/python main.py --mode scheduled)",
+      "Bash(.venv/Scripts/python -m src.gemini_client)",
+      "Bash(.venv/Scripts/python main.py --mode scheduled --force)",
+      "Bash(.venv/Scripts/pytest tests/ -v)",
+      "Bash(.venv/Scripts/pytest tests/ -v --tb=short)",
+      "Bash(.venv/Scripts/python -c \"import sqlite3; conn = sqlite3.connect\\('data/seen_articles.db'\\); conn.execute\\('DELETE FROM seen_articles'\\); conn.commit\\(\\); conn.close\\(\\); print\\('Cleared seen_articles'\\)\")",
+      "Bash(python -m pytest tests/test_gemini_client.py -v)"
+    ]
+  },
+  "skillOverrides": {
+    "agp-9-upgrade": "off",
+    "android-cli": "off",
+    "camera1-to-camerax": "off",
+    "display-ai-glasses-with-jetpack-compose-glimmer": "off",
+    "edge-to-edge": "off",
+    "google-agents-cli-adk-code": "off",
+    "google-agents-cli-deploy": "off",
+    "google-agents-cli-eval": "off",
+    "google-agents-cli-observability": "off",
+    "google-agents-cli-publish": "off",
+    "google-agents-cli-scaffold": "off",
+    "google-agents-cli-workflow": "off",
+    "migrate-xml-views-to-jetpack-compose": "off",
+    "navigation-3": "off",
+    "perfetto-sql": "off",
+    "play-billing-library-version-upgrade": "off",
+    "r8-analyzer": "off"
+  }
+}

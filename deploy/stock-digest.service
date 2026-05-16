@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily US Stock Digest — scheduled run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=USER
+WorkingDirectory=/home/USER/stock-digest
+ExecStart=/home/USER/stock-digest/.venv/bin/python main.py --mode scheduled
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
