@@ -345,6 +345,122 @@ sudo systemctl list-timers   # verify it's scheduled
 
 ---
 
+## Step 13: Clone and Deploy the Stock Digest App
+
+This step installs and runs the actual application on the Pi. Complete Steps 1–12 first.
+
+### 1. Clone the repository
+
+```bash
+cd ~
+git clone https://github.com/YOUR-USERNAME/stock-digest.git
+cd stock-digest
+```
+
+> Replace the URL with your actual repository URL. If the repo is private, authenticate first:
+> ```bash
+> git config --global credential.helper store
+> git clone https://github.com/YOUR-USERNAME/stock-digest.git
+> # Enter your GitHub username and a personal access token when prompted
+> ```
+
+### 2. Create a virtual environment and install dependencies
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+> On the Pi Zero 2 W, `pip install` may take a few minutes. If you see memory errors, make sure zram is running (`zramctl`).
+
+### 3. Configure environment variables
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Fill in all four values:
+
+```
+GEMINI_API_KEY=your_gemini_api_key_here
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_IDS=123456789
+ADMIN_CHAT_ID=123456789
+```
+
+Save and exit (`Ctrl+X`, `Y`, `Enter`).
+
+### 4. Test the app runs correctly
+
+Run the pipeline once manually to confirm everything works end-to-end:
+
+```bash
+source .venv/bin/activate
+python main.py --mode scheduled
+```
+
+You should see log output and receive a Telegram message. If there are errors, check your `.env` values and network connection.
+
+To test the Telegram bot (interactive commands):
+
+```bash
+python main.py --bot
+```
+
+Press `Ctrl+C` to stop it once you confirm it responds to `/start`.
+
+### 5. Deploy with systemd
+
+The `deploy/` folder contains ready-made unit files. Copy them, substitute your username, then enable:
+
+```bash
+# Replace USER with your actual Pi username throughout
+USERNAME=$(whoami)
+
+sudo cp deploy/stock-digest.service /etc/systemd/system/
+sudo cp deploy/stock-digest.timer   /etc/systemd/system/
+sudo cp deploy/stock-digest-bot.service /etc/systemd/system/
+
+# Substitute the placeholder USER with your actual username
+sudo sed -i "s/USER/$USERNAME/g" /etc/systemd/system/stock-digest.service
+sudo sed -i "s/USER/$USERNAME/g" /etc/systemd/system/stock-digest.timer
+sudo sed -i "s/USER/$USERNAME/g" /etc/systemd/system/stock-digest-bot.service
+```
+
+Reload systemd and enable both the scheduled pipeline and the bot:
+
+```bash
+sudo systemctl daemon-reload
+
+# Scheduled digest (timer fires Mon–Fri at 13:00 UTC and 22:00 UTC)
+sudo systemctl enable stock-digest.timer
+sudo systemctl start stock-digest.timer
+
+# Telegram bot (always-on, restarts automatically on failure)
+sudo systemctl enable stock-digest-bot.service
+sudo systemctl start stock-digest-bot.service
+```
+
+### 6. Verify everything is running
+
+```bash
+# Check the timer is scheduled
+sudo systemctl list-timers stock-digest.timer
+
+# Check the bot service is active
+sudo systemctl status stock-digest-bot.service
+
+# Tail live logs
+sudo journalctl -u stock-digest-bot.service -f
+sudo journalctl -u stock-digest.service -f
+```
+
+The bot is live when you see `Application started` in the logs and your Pi responds to `/start` in Telegram.
+
+---
+
 ## Common Problems & Fixes
 
 | Problem | Likely Cause | Fix |
@@ -361,7 +477,7 @@ sudo systemctl list-timers   # verify it's scheduled
 
 ## Next Steps
 
-This setup is the foundation for the **Daily US Stock News Summarizer** described in `architecture_plan.md`:
+This setup is the foundation for the **Daily US Stock News Summarizer** (see Step 13 above):
 
 - **RSS Feed Fetcher** — async `feedparser` + `aiohttp` pulling financial news
 - **AI Summarizer** — Gemini API call with a filtered news digest

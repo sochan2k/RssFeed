@@ -12,7 +12,12 @@
       "Bash(.venv/Scripts/pytest tests/ -v --tb=short)",
       "Bash(.venv/Scripts/python -c \"import sqlite3; conn = sqlite3.connect\\('data/seen_articles.db'\\); conn.execute\\('DELETE FROM seen_articles'\\); conn.commit\\(\\); conn.close\\(\\); print\\('Cleared seen_articles'\\)\")",
       "Bash(python -m pytest tests/test_gemini_client.py -v)",
-      "Bash(python -c \"from src.telegram_bot import cmd_ask; from src.prompts import ASK_SYSTEM_PROMPT, build_ask_prompt; print\\('OK'\\)\")"
+      "Bash(python -c \"from src.telegram_bot import cmd_ask; from src.prompts import ASK_SYSTEM_PROMPT, build_ask_prompt; print\\('OK'\\)\")",
+      "Bash(pytest tests/ --collect-only)",
+      "Bash(pytest tests/test_feeds.py --collect-only)",
+      "Bash(pip install *)",
+      "Bash(pytest tests/)",
+      "Bash(python -m pytest)"
     ]
   },
   "skillOverrides": {
