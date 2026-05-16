@@ -92,6 +92,33 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(f"Error: {exc}")
 
 
+async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    question = " ".join(context.args).strip() if context.args else ""
+    if not question:
+        await update.message.reply_text(
+            "Usage: /ask <your question>\n"
+            "Example: /ask why did treasury yields jump and kill stocks today?"
+        )
+        return
+
+    await update.message.reply_text("Researching…")
+
+    try:
+        from src.feeds import fetch_articles
+        from src.filters import filter_articles
+        from src.gemini_client import generate
+        from src.prompts import ASK_SYSTEM_PROMPT, build_ask_prompt
+
+        articles = await fetch_articles()
+        filtered = filter_articles(articles)
+        prompt = build_ask_prompt(question, filtered)
+        answer = await generate(prompt, system_prompt=ASK_SYSTEM_PROMPT, use_cache=True)
+        await update.message.reply_html(answer)
+    except Exception as exc:
+        logger.error("cmd_ask error: %s", exc)
+        await update.message.reply_text(f"Error: {exc}")
+
+
 async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.pipeline import run as pipeline_run
     await update.message.reply_text("Fetching last 2 hours of news…")
@@ -185,13 +212,15 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("breaking", cmd_breaking))
+    app.add_handler(CommandHandler("ask", cmd_ask))
 
     async with app:
         await app.bot.set_my_commands([
             BotCommand("summary", "On-demand stock digest"),
+            BotCommand("breaking", "Last 2 hours of breaking news"),
+            BotCommand("ask", "Ask a finance question grounded in today's news"),
             BotCommand("status", "Last run time and result"),
             BotCommand("health", "System metrics"),
-            BotCommand("breaking", "Last 2 hours of breaking news"),
         ])
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)

@@ -215,3 +215,46 @@ def build_analyst_prompt(articles: list[dict]) -> str:
 
 def build_editor_prompt(analysis: str) -> str:
     return EDITOR_AGENT_PROMPT_TEMPLATE.format(analysis=analysis)
+
+
+# ---------------------------------------------------------------------------
+# /ask Q&A prompt
+# ---------------------------------------------------------------------------
+
+ASK_SYSTEM_PROMPT = """
+You are an expert financial analyst answering a specific question from a
+self-directed US equity investor.
+
+Rules:
+• Ground your answer in the provided news articles when they are relevant.
+  If the articles don't cover the topic, answer from your general knowledge
+  and say so briefly.
+• Use Telegram HTML only: <b>bold</b> <i>italic</i>. No Markdown.
+• Bullet points use the • character.
+• Be concise — stay under 3800 characters.
+• No disclaimers or suggestions to consult a financial advisor.
+• Include ticker symbols in parentheses, e.g. Apple (AAPL).
+• Quantify where possible: percentages, basis points, dollar amounts.
+""".strip()
+
+ASK_PROMPT_TEMPLATE = """
+Today is {date} (ICT, UTC+7).
+
+The investor's question: {question}
+
+Below are the latest US financial news articles collected in the past 24 hours.
+Use them as context where relevant.
+
+--- NEWS FEED START ---
+{articles}
+--- NEWS FEED END ---
+
+Answer the question directly and concisely.
+""".strip()
+
+
+def build_ask_prompt(question: str, articles: list[dict]) -> str:
+    now = datetime.now(timezone.utc)
+    date = f"{now.strftime('%A, %B')} {now.day}, {now.year}"
+    articles_block = _format_articles(articles) if articles else "No articles available."
+    return ASK_PROMPT_TEMPLATE.format(date=date, question=question, articles=articles_block)
