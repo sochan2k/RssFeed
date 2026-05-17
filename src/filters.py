@@ -1,4 +1,5 @@
 import logging
+import re
 from difflib import SequenceMatcher
 
 from src.config import (
@@ -10,14 +11,19 @@ from src import db
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled macro term patterns for whole-word matching
+_MACRO_PATTERNS = [re.compile(r'\b' + re.escape(t) + r'\b', re.IGNORECASE) for t in MACRO_TERMS]
 
-def _watchlist_score(article: dict) -> int:
-    watchlist = db.get_watchlist()
-    all_tickers = [t for group in watchlist.values() for t in group]
-    
+
+def _ticker_pattern(ticker: str) -> re.Pattern:
+    return re.compile(r'\b' + re.escape(ticker.upper()) + r'\b')
+
+
+def _watchlist_score(article: dict, tickers: list[str]) -> int:
+    """Score article relevance using pre-fetched ticker list (no DB call here)."""
     text = f"{article['title']} {article['summary']}".upper()
-    score = sum(1 for t in all_tickers if t.upper() in text)
-    score += sum(1 for t in MACRO_TERMS if t.upper() in text)
+    score = sum(1 for t in tickers if _ticker_pattern(t).search(text))
+    score += sum(1 for p in _MACRO_PATTERNS if p.search(text))
     return score
 
 
@@ -59,13 +65,13 @@ def filter_articles(
     mark_seen=False skips recording survivors in the seen_articles table,
     so ondemand/breaking runs don't consume articles for the scheduled digest.
     """
+    # Fetch watchlist once for the entire batch
+    watchlist = db.get_watchlist()
+    all_tickers = [t for group in watchlist.values() for t in group]
+
     # Layer 1
     after_l1 = []
-
-    target_tickers = None
-    if target:
-        watchlist = db.get_watchlist()
-        target_tickers = _resolve_target(target, watchlist)
+    target_tickers = _resolve_target(target, watchlist) if target else None
 
     for a in articles:
         if target_tickers:
@@ -75,7 +81,7 @@ def filter_articles(
         else:
             if _is_blacklisted(a):
                 continue
-            if _watchlist_score(a) == 0:
+            if _watchlist_score(a, all_tickers) == 0:
                 continue
         after_l1.append(a)
     logger.info("Layer 1 (heuristics): %d → %d", len(articles), len(after_l1))

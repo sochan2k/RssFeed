@@ -4,12 +4,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _require(key: str) -> str:
+    val = os.environ.get(key, "").strip()
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {key}  (copy .env.example → .env and fill it in)")
+    return val
+
+
 # --- API Keys ---
-GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
-TELEGRAM_BOT_TOKEN: str = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_IDS: list[int] = [
-    int(x) for x in os.environ["TELEGRAM_CHAT_IDS"].split(",")
-]
+GEMINI_API_KEY: str = _require("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")
+
+_raw_ids = _require("TELEGRAM_CHAT_IDS")
+try:
+    TELEGRAM_CHAT_IDS: list[int] = [int(x.strip()) for x in _raw_ids.split(",") if x.strip()]
+except ValueError as e:
+    raise RuntimeError(f"TELEGRAM_CHAT_IDS must be comma-separated integers, got: {_raw_ids!r}") from e
+if not TELEGRAM_CHAT_IDS:
+    raise RuntimeError("TELEGRAM_CHAT_IDS is empty — provide at least one chat ID")
+
 ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", TELEGRAM_CHAT_IDS[0]))
 
 # --- Gemini Model Fallback Chain ---
@@ -24,8 +38,10 @@ GEMINI_MODELS: list[str] = [
 
 # --- Watchlist & Macro Terms ---
 DEFAULT_WATCHLIST: dict[str, list[str]] = {
-    "ai": ["NVDA", "MSFT", "GOOGL", "META", "TSMC"],
-    "consumer": ["AAPL", "AMZN", "TSLA"],
+    "ai_tech": ["NVDA", "GOOG", "AAPL", "TSLA"],
+    "semiconductor": ["MU", "SNDK", "LITE", "COHR", "AVGO", "INTC", "AMD", "AMAT", "LRCX", "ADI"],
+    "space": ["RKLB"],
+    "materials": ["LIN"]
 }
 MACRO_TERMS: list[str] = [
     "CPI", "Fed", "Federal Reserve", "interest rate", "GDP", "inflation",

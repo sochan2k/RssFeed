@@ -178,7 +178,10 @@ async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     from src.pipeline import run as pipeline_run
     hours = BREAKING_NEWS_HOURS
     if context.args and context.args[0].isdigit():
-        hours = min(max(int(context.args[0]), 1), 24)
+        requested = int(context.args[0])
+        hours = min(max(requested, 1), 24)
+        if hours != requested:
+            await update.message.reply_text(f"Hours clamped to {hours} (valid range: 1–24).")
     await update.message.reply_text(f"Fetching last {hours}h of news…")
     try:
         summary = await pipeline_run(mode="breaking", hours_back=hours)
@@ -294,18 +297,18 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 def _read_cpu_temp() -> str:
     try:
-        temp_raw = open("/sys/class/thermal/thermal_zone0/temp").read().strip()
-        return f"{int(temp_raw) / 1000:.1f}°C"
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return f"{int(f.read().strip()) / 1000:.1f}°C"
     except OSError:
         return "n/a (not on Pi)"
 
 
 def _read_free_ram() -> str:
     try:
-        for line in open("/proc/meminfo"):
-            if line.startswith("MemAvailable:"):
-                kb = int(line.split()[1])
-                return f"{kb // 1024} MB free"
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return f"{int(line.split()[1]) // 1024} MB free"
     except OSError:
         pass
     return "n/a (not on Pi)"
@@ -313,11 +316,11 @@ def _read_free_ram() -> str:
 
 def _read_uptime() -> str:
     try:
-        seconds = float(open("/proc/uptime").read().split()[0])
+        with open("/proc/uptime") as f:
+            seconds = float(f.read().split()[0])
         d, rem = divmod(int(seconds), 86400)
         h, rem = divmod(rem, 3600)
-        m = rem // 60
-        return f"{d}d {h}h {m}m"
+        return f"{d}d {h}h {rem // 60}m"
     except OSError:
         return "n/a (not on Pi)"
 

@@ -35,10 +35,13 @@ async def run_filter_agent(articles: list[dict]) -> list[dict]:
     try:
         scores: list[dict] = json.loads(raw)
         high_impact = [
-            articles[item["index"]]
+            articles[idx]
             for item in scores
-            if item["score"] >= AI_RELEVANCE_SCORE_THRESHOLD
-            and 0 <= item["index"] < len(articles)
+            if isinstance(item, dict)
+            and isinstance((idx := item.get("index")), int)
+            and isinstance(item.get("score"), (int, float))
+            and item["score"] >= AI_RELEVANCE_SCORE_THRESHOLD
+            and 0 <= idx < len(articles)
         ]
         logger.info(
             "Filter agent: %d → %d articles (threshold=%d)",
