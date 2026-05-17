@@ -5,7 +5,6 @@ from src.config import (
     BLACKLIST_KEYWORDS,
     HEADLINE_SIMILARITY_THRESHOLD,
     MACRO_TERMS,
-    WATCHLIST,
 )
 from src import db
 
@@ -13,8 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def _watchlist_score(article: dict) -> int:
+    watchlist = db.get_watchlist()
+    all_tickers = [t for group in watchlist.values() for t in group]
+    
     text = f"{article['title']} {article['summary']}".upper()
-    score = sum(1 for t in WATCHLIST if t.upper() in text)
+    score = sum(1 for t in all_tickers if t.upper() in text)
     score += sum(1 for t in MACRO_TERMS if t.upper() in text)
     return score
 
@@ -29,7 +31,7 @@ def _similar(a: str, b: str) -> bool:
     return ratio >= HEADLINE_SIMILARITY_THRESHOLD
 
 
-def filter_articles(articles: list[dict]) -> list[dict]:
+def filter_articles(articles: list[dict], target: str | None = None) -> list[dict]:
     """
     3-layer filter:
       Layer 1 — heuristics: blacklist drop, watchlist score (drop score == 0)
@@ -39,11 +41,26 @@ def filter_articles(articles: list[dict]) -> list[dict]:
     """
     # Layer 1
     after_l1 = []
+    
+    target_tickers = None
+    if target:
+        target = target.lower()
+        watchlist = db.get_watchlist()
+        if target in watchlist:
+            target_tickers = [t.lower() for t in watchlist[target]]
+        else:
+            target_tickers = [target]
+
     for a in articles:
-        if _is_blacklisted(a):
-            continue
-        if _watchlist_score(a) == 0:
-            continue
+        if target_tickers:
+            text = f"{a['title']} {a['summary']}".lower()
+            if not any(t in text for t in target_tickers):
+                continue
+        else:
+            if _is_blacklisted(a):
+                continue
+            if _watchlist_score(a) == 0:
+                continue
         after_l1.append(a)
     logger.info("Layer 1 (heuristics): %d → %d", len(articles), len(after_l1))
 

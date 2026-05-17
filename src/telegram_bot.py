@@ -84,9 +84,24 @@ async def send_alert(text: str) -> None:
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.pipeline import run as pipeline_run
-    await update.message.reply_text("Generating digest, please wait…")
+    target = context.args[0].lower() if context.args else None
+    
+    if target == "help":
+        await update.message.reply_text(
+            "Usage:\n"
+            "• /summary — Overall market and entire watchlist\n"
+            "• /summary <category> — Specific category (e.g. /summary ai)\n"
+            "• /summary <ticker> — Specific stock (e.g. /summary AAPL)"
+        )
+        return
+        
+    if target:
+        await update.message.reply_text(f"Generating custom digest for '{target.upper()}', please wait…")
+    else:
+        await update.message.reply_text("Generating market digest, please wait…")
+        
     try:
-        summary = await pipeline_run(mode="ondemand")
+        summary = await pipeline_run(mode="ondemand", target=target)
         await update.message.reply_html(summary)
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
@@ -127,6 +142,56 @@ async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_html(summary)
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
+
+
+async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src import db
+    db.init_db()
+    watchlist = db.get_watchlist()
+    if not watchlist:
+        await update.message.reply_text("Watchlist is empty. Use /add <category> <ticker>")
+        return
+
+    filter_cat = context.args[0].lower() if context.args else None
+    
+    lines = []
+    for cat, tickers in sorted(watchlist.items()):
+        if filter_cat and cat != filter_cat:
+            continue
+        lines.append(f"<b>{cat.title()}:</b> " + ", ".join(tickers))
+        
+    if not lines:
+        await update.message.reply_text(f"No tickers found in category: {filter_cat}")
+        return
+        
+    await update.message.reply_html("\n".join(lines))
+
+
+async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 2:
+        await update.message.reply_text("Usage: /add <category> <ticker>\nExample: /add ai NVDA")
+        return
+    
+    cat, ticker = context.args[0].lower(), context.args[1].upper()
+    from src import db
+    db.init_db()
+    db.add_to_watchlist(cat, ticker)
+    await update.message.reply_html(f"✅ <b>{ticker}</b> has been added to the <b>{cat.title()}</b> watchlist.")
+
+
+async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /remove <ticker>\nExample: /remove NVDA")
+        return
+    
+    ticker = context.args[0]
+    from src import db
+    db.init_db()
+    removed = db.remove_from_watchlist(ticker)
+    if removed:
+        await update.message.reply_text(f"❌ {ticker.upper()} has been removed.")
+    else:
+        await update.message.reply_text(f"Ticker {ticker.upper()} not found in watchlist.")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -209,6 +274,9 @@ async def run_bot() -> None:
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("summary", cmd_summary))
+    app.add_handler(CommandHandler("watchlist", cmd_watchlist))
+    app.add_handler(CommandHandler("add", cmd_add))
+    app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("breaking", cmd_breaking))
@@ -216,7 +284,10 @@ async def run_bot() -> None:
 
     async with app:
         await app.bot.set_my_commands([
-            BotCommand("summary", "On-demand stock digest"),
+            BotCommand("summary", "Market digest (/summary [category/ticker])"),
+            BotCommand("watchlist", "View your categorized watchlist"),
+            BotCommand("add", "Add ticker (/add <group> <ticker>)"),
+            BotCommand("remove", "Remove ticker (/remove <ticker>)"),
             BotCommand("breaking", "Last 2 hours of breaking news"),
             BotCommand("ask", "Ask a finance question grounded in today's news"),
             BotCommand("status", "Last run time and result"),

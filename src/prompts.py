@@ -60,11 +60,11 @@ with the following structure:
 """.strip()
 
 ONDEMAND_PROMPT_TEMPLATE = """
-Today is {date} (ICT, UTC+7). The user requested an on-demand digest.
+Today is {date} (ICT, UTC+7). The user requested an on-demand digest {target_text}.
 Produce a compact briefing (shorter than the scheduled digest) covering only
 the most important developments from the news below.
 
-Structure: sentiment line → top 3 items → one watch-out.
+Structure: sentiment line → top items → one watch-out.
 Use the same HTML formatting rules as your system instructions.
 
 --- NEWS FEED START ---
@@ -87,6 +87,7 @@ def build_prompt(
     articles: list[dict],
     mode: str = "scheduled",
     hours_back: int | None = None,
+    target: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     date = f"{now.strftime('%A, %B')} {now.day}, {now.year}"
@@ -99,7 +100,8 @@ def build_prompt(
             articles=articles_block,
         )
     if mode == "ondemand":
-        return ONDEMAND_PROMPT_TEMPLATE.format(date=date, articles=articles_block)
+        target_text = f"specifically for '{target.upper()}'" if target else "for all watchlist sectors"
+        return ONDEMAND_PROMPT_TEMPLATE.format(date=date, target_text=target_text, articles=articles_block)
     return SCHEDULED_PROMPT_TEMPLATE.format(date=date, articles=articles_block)
 
 
@@ -139,7 +141,7 @@ do not apply any final formatting — use plain text with clear section labels.
 Cover:
 1. Overall market sentiment and rationale (one sentence)
 2. Top macro drivers with specific data points
-3. Key company events with ticker symbols and quantified impact
+3. Key company events, grouped by their respective market sectors or categories (e.g., AI/Tech, Consumer, Finance). Include ticker symbols and quantified impact.
 4. One forward-looking item to watch tomorrow
 
 Be concise and data-driven. No disclaimers.
@@ -154,7 +156,7 @@ Rules:
 • Never use Markdown syntax (no *, _, #, etc.)
 • Keep total length under 3800 characters
 • Sentiment: 🟢 Bullish | 🔴 Bearish | 🟡 Mixed
-• Flag watchlist tickers (AAPL NVDA TSMC MSFT GOOGL AMZN META TSLA) with ⭐
+• Flag any known watchlist tickers with ⭐
 
 Required structure:
 <b>📊 Market Sentiment</b>
@@ -163,8 +165,8 @@ Required structure:
 <b>🏛 Top Macro Drivers</b>
 • ...
 
-<b>📈 Key Company News</b>
-• ...
+<b>📈 Company News by Category</b>
+[Group the news under bolded category names (e.g., <b>🤖 AI/Tech:</b>, <b>🛒 Consumer:</b>), followed by bullet points for each update]
 
 <b>⚠️ Watch Tomorrow</b>
 [one sentence]

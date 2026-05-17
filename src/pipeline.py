@@ -30,6 +30,7 @@ async def _run_agent_chain(articles: list[dict]) -> str:
 async def run(
     mode: str = "scheduled",
     hours_back: int | None = None,
+    target: str | None = None,
 ) -> str:
     """
     Full pipeline: fetch → filter → summarise.
@@ -51,10 +52,12 @@ async def run(
         db.log_run(success=False, articles_fetched=0, articles_sent=0, error=msg)
         return msg
 
-    filtered = filter_articles(articles)
+    filtered = filter_articles(articles, target=target)
 
     if not filtered:
         msg = "No significant market news today — all articles filtered out."
+        if target:
+            msg = f"No significant news found today for '{target}'."
         db.log_run(success=True, articles_fetched=len(articles), articles_sent=0)
         return msg
 
@@ -62,7 +65,7 @@ async def run(
         if mode == "scheduled":
             summary = await _run_agent_chain(filtered)
         else:
-            prompt = build_prompt(filtered, mode=mode, hours_back=hours_back)
+            prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target)
             summary = await generate(prompt, system_prompt=SYSTEM_PROMPT, use_cache=True)
     except Exception as exc:
         error_msg = f"Gemini error: {exc}"

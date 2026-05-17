@@ -23,7 +23,10 @@ GEMINI_MODELS: list[str] = [
 ]
 
 # --- Watchlist & Macro Terms ---
-WATCHLIST: list[str] = ["AAPL", "NVDA", "TSMC", "MSFT", "GOOGL", "AMZN", "META", "TSLA"]
+DEFAULT_WATCHLIST: dict[str, list[str]] = {
+    "ai": ["NVDA", "MSFT", "GOOGL", "META", "TSMC"],
+    "consumer": ["AAPL", "AMZN", "TSLA"],
+}
 MACRO_TERMS: list[str] = [
     "CPI", "Fed", "Federal Reserve", "interest rate", "GDP", "inflation",
     "unemployment", "jobs report", "FOMC", "treasury", "yield curve",
