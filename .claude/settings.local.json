@@ -17,7 +17,11 @@
       "Bash(pytest tests/test_feeds.py --collect-only)",
       "Bash(pip install *)",
       "Bash(pytest tests/)",
-      "Bash(python -m pytest)"
+      "Bash(python -m pytest)",
+      "Bash(Test-Path *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   },
   "skillOverrides": {
