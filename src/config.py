@@ -71,6 +71,11 @@ HEADLINE_SIMILARITY_THRESHOLD: float = 0.80
 AI_RELEVANCE_SCORE_THRESHOLD: int = 7
 DB_RETENTION_DAYS: int = 90
 
+# --- Scheduler ---
+# Daily digest time in DIGEST_TIMEZONE. Override via .env: DIGEST_SCHEDULE_TIME=18:30
+DIGEST_SCHEDULE_TIME: str = os.environ.get("DIGEST_SCHEDULE_TIME", "08:00")
+DIGEST_TIMEZONE: str = "Asia/Bangkok"  # ICT UTC+7, no DST
+
 # --- Paths ---
 BASE_DIR: Path = Path(__file__).parent.parent
 DATA_DIR: Path = BASE_DIR / "data"

@@ -1,13 +1,21 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from telegram import Bot, BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from src.config import ADMIN_CHAT_ID, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS
+from src.config import (
+    ADMIN_CHAT_ID,
+    DIGEST_SCHEDULE_TIME,
+    DIGEST_TIMEZONE,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_IDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +108,10 @@ _HELP_TEXT = (
     "<b>ℹ️ System</b>\n"
     "/status — Last pipeline run\n"
     "/status &lt;N&gt; — Last N runs, e.g. <code>/status 5</code>\n"
-    "/health — System metrics\n"
-    "/help — Show this message"
+    f"/health — System metrics + next scheduled digest\n"
+    "/help — Show this message\n"
+    "\n"
+    f"<i>📅 Daily digest runs at {DIGEST_SCHEDULE_TIME} {DIGEST_TIMEZONE}</i>"
 )
 
 
@@ -278,19 +288,18 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from src import db
     db.init_db()
     last = db.get_last_run()
-    last_run = last["ran_at"] if last else "never"
+    last_run = last["ran_at"][:19].replace("T", " ") + " UTC" if last else "never"
 
-    # Real metrics on Pi — stubs on Windows/Mac
-    cpu_temp = _read_cpu_temp()
-    free_ram = _read_free_ram()
-    uptime = _read_uptime()
+    next_t = _next_digest_time()
+    next_run = next_t.strftime("%Y-%m-%d %H:%M") + f" {DIGEST_TIMEZONE}"
 
     lines = [
-        f"CPU temp: {cpu_temp}",
-        f"Free RAM: {free_ram}",
-        f"Last run: {last_run}",
+        f"CPU temp: {_read_cpu_temp()}",
+        f"Free RAM: {_read_free_ram()}",
+        f"Uptime:   {_read_uptime()}",
         f"Platform: {platform.system()} {platform.machine()}",
-        f"Uptime:   {uptime}",
+        f"Last run: {last_run}",
+        f"Next run: {next_run}",
     ]
     await update.message.reply_text("\n".join(lines))
 
@@ -323,6 +332,50 @@ def _read_uptime() -> str:
         return f"{d}d {h}h {rem // 60}m"
     except OSError:
         return "n/a (not on Pi)"
+
+
+# ---------------------------------------------------------------------------
+# Scheduler — daily digest
+# ---------------------------------------------------------------------------
+
+def _next_digest_time() -> datetime:
+    """Return the next scheduled digest datetime in the configured timezone."""
+    tz = ZoneInfo(DIGEST_TIMEZONE)
+    h, m = map(int, DIGEST_SCHEDULE_TIME.split(":"))
+    now = datetime.now(tz=tz)
+    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now >= target:
+        target += timedelta(days=1)
+    return target
+
+
+async def _run_scheduled_digest() -> None:
+    """Execute the full 3-agent pipeline and deliver to all chat IDs."""
+    from src.pipeline import run as pipeline_run
+    logger.info("Scheduler: starting daily digest")
+    try:
+        summary = await pipeline_run(mode="scheduled")
+        await send_digest(summary)
+        logger.info("Scheduler: digest delivered")
+    except Exception as exc:
+        logger.error("Scheduler: digest failed: %s", exc)
+        await send_alert(f"⚠️ Daily digest failed: {exc}")
+
+
+async def _scheduler_loop() -> None:
+    """Sleep until the next configured time, fire the digest, repeat forever."""
+    while True:
+        target = _next_digest_time()
+        wait_secs = (target - datetime.now(tz=ZoneInfo(DIGEST_TIMEZONE))).total_seconds()
+        logger.info(
+            "Scheduler: next digest at %s %s (in %dh %dm)",
+            target.strftime("%Y-%m-%d %H:%M"),
+            DIGEST_TIMEZONE,
+            int(wait_secs // 3600),
+            int((wait_secs % 3600) // 60),
+        )
+        await asyncio.sleep(wait_secs)
+        await _run_scheduled_digest()
 
 
 # ---------------------------------------------------------------------------
@@ -360,8 +413,17 @@ async def run_bot() -> None:
         ])
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
-        logger.info("Bot polling — press Ctrl+C to stop")
-        await asyncio.Event().wait()
+        scheduler = asyncio.create_task(_scheduler_loop())
+        next_t = _next_digest_time()
+        logger.info(
+            "Bot polling — next digest at %s %s — press Ctrl+C to stop",
+            next_t.strftime("%Y-%m-%d %H:%M"),
+            DIGEST_TIMEZONE,
+        )
+        try:
+            await asyncio.Event().wait()
+        finally:
+            scheduler.cancel()
 
 
 # ---------------------------------------------------------------------------
