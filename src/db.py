@@ -136,3 +136,11 @@ def get_last_run() -> dict | None:
             "SELECT * FROM run_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_recent_runs(limit: int = 5) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM run_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]

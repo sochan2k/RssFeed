@@ -1,7 +1,33 @@
 from datetime import datetime, timezone
 
-# Kept verbose intentionally — Gemini context caching requires ≥1024 tokens.
-SYSTEM_PROMPT = """
+from src.config import DEFAULT_WATCHLIST
+
+
+# ---------------------------------------------------------------------------
+# Watchlist helpers
+# ---------------------------------------------------------------------------
+
+def _get_watchlist() -> dict[str, list[str]]:
+    """Read live watchlist from DB; fall back to config defaults on any error."""
+    try:
+        from src import db
+        wl = db.get_watchlist()
+        return wl if wl else DEFAULT_WATCHLIST
+    except Exception:
+        return DEFAULT_WATCHLIST
+
+
+def _flat_tickers(watchlist: dict[str, list[str]]) -> str:
+    """Return sorted, comma-separated string of all watchlist tickers."""
+    tickers = sorted({t for tlist in watchlist.values() for t in tlist})
+    return ", ".join(tickers)
+
+
+# ---------------------------------------------------------------------------
+# System prompts (dynamic — watchlist injected at call time)
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT_TEMPLATE = """
 You are an expert financial analyst and market commentator with 20+ years of
 experience covering US equity markets. Your role is to produce concise,
 professional daily market briefings for a sophisticated retail investor.
@@ -9,6 +35,9 @@ professional daily market briefings for a sophisticated retail investor.
 AUDIENCE: A self-directed investor who actively manages a personal portfolio
 of US equities, monitors macro-economic developments, and expects signal-rich
 summaries — not generic filler.
+
+USER'S WATCHLIST — flag any mention of these tickers with ⭐ in your output:
+{watchlist_tickers}
 
 OUTPUT FORMAT: All output must be valid Telegram HTML using only these tags:
   <b>bold</b>  <i>italic</i>  <code>inline code</code>
@@ -27,12 +56,24 @@ CONTENT RULES:
 4. Express sentiment as one of: 🟢 Bullish | 🔴 Bearish | 🟡 Mixed.
 5. Quantify where possible: percentages, dollar amounts, EPS figures, rate
    basis points.
-6. Flag anything that directly affects the user's watchlist with ⭐.
+6. Add ⭐ immediately after the ticker symbol for any watchlist ticker, e.g. NVDA ⭐.
 7. If no genuinely market-moving news exists, say so clearly in one sentence.
 
 PROHIBITED: Do not add disclaimers, legal boilerplate, or suggestions to
 consult a financial advisor. The user knows investing involves risk.
 """.strip()
+
+
+def build_system_prompt(watchlist: dict[str, list[str]] | None = None) -> str:
+    """Build system prompt with the live watchlist injected."""
+    if watchlist is None:
+        watchlist = _get_watchlist()
+    return _SYSTEM_PROMPT_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist))
+
+
+# ---------------------------------------------------------------------------
+# User prompt templates (scheduled / ondemand / breaking)
+# ---------------------------------------------------------------------------
 
 SCHEDULED_PROMPT_TEMPLATE = """
 Today is {date} (ICT, UTC+7). Below are the latest US financial news headlines
@@ -61,11 +102,17 @@ with the following structure:
 
 ONDEMAND_PROMPT_TEMPLATE = """
 Today is {date} (ICT, UTC+7). The user requested an on-demand digest {target_text}.
-Produce a compact briefing (shorter than the scheduled digest) covering only
-the most important developments from the news below.
+Produce a compact briefing — shorter than the scheduled digest. Limit to 2000 characters.
 
-Structure: sentiment line → top items → one watch-out.
-Use the same HTML formatting rules as your system instructions.
+Structure:
+<b>📊 Sentiment:</b> [🟢/🔴/🟡 + one sentence]
+
+<b>📌 Top Items</b>
+• [3–5 most important bullet points, lead with the biggest mover]
+
+<b>⚠️ Watch:</b> [one forward-looking sentence]
+
+Use the same Telegram HTML formatting rules from your system instructions.
 
 --- NEWS FEED START ---
 {articles}
@@ -74,8 +121,11 @@ Use the same HTML formatting rules as your system instructions.
 
 BREAKING_PROMPT_TEMPLATE = """
 Today is {date} (ICT, UTC+7). The user requested a BREAKING NEWS digest
-covering only the past {hours} hours. Be ultra-concise — bullet points only,
-no section headers. Lead with the most market-moving item.
+covering only the past {hours} hours.
+
+STRUCTURE OVERRIDE: Output bullet points only — no section headers, no
+sentiment block, no Watch Tomorrow line. Lead with the most market-moving
+item. One line per bullet maximum. Be ultra-concise.
 
 --- NEWS FEED START ---
 {articles}
@@ -106,21 +156,33 @@ def build_prompt(
 
 
 def _format_articles(articles: list[dict]) -> str:
+    now = datetime.now(timezone.utc)
     lines = []
     for i, a in enumerate(articles, 1):
         title = a.get("title", "").strip()
         summary = a.get("summary", "").strip()
         source = a.get("source", "")
+        published = a.get("published_utc")
+
+        age_str = ""
+        if published:
+            try:
+                pub_dt = datetime.fromisoformat(published)
+                mins = int((now - pub_dt).total_seconds() / 60)
+                age_str = f" {mins}m ago" if mins < 60 else f" {mins // 60}h ago"
+            except Exception:
+                pass
+
         body = f"{title}. {summary}" if summary else title
-        lines.append(f"[{i}] ({source}) {body}")
+        lines.append(f"[{i}] ({source}{age_str}) {body}")
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Multi-agent prompts (Phase 3) — Filter → Analyst → Editor
+# Multi-agent prompts — Filter → Analyst → Editor
 # ---------------------------------------------------------------------------
 
-FILTER_AGENT_SYSTEM = """
+_FILTER_AGENT_SYSTEM_TEMPLATE = """
 You are a financial news relevance scorer for a US equity investor.
 Score each article 1–10 on its potential to move stock prices:
   9–10 = Breaking: Fed rate decision, major earnings beat/miss, large M&A announcement
@@ -128,26 +190,49 @@ Score each article 1–10 on its potential to move stock prices:
   5–6  = Medium: Minor company news, routine scheduled event, sector rotation commentary
   1–4  = Low: Opinion piece, soft/vague news, press release fluff, duplicate angle
 
+BONUS: Add +1 (cap at 10) for any article that directly mentions a watchlist ticker.
+User's watchlist tickers: {watchlist_tickers}
+
 Return ONLY a JSON array with one object per article.
 Each object must have exactly two integer fields: "index" (0-based) and "score".
-Example: [{"index": 0, "score": 9}, {"index": 1, "score": 4}]
+Example: [{{"index": 0, "score": 9}}, {{"index": 1, "score": 4}}]
 """.strip()
+
+
+def build_filter_system(watchlist: dict[str, list[str]] | None = None) -> str:
+    if watchlist is None:
+        watchlist = _get_watchlist()
+    return _FILTER_AGENT_SYSTEM_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist))
+
 
 ANALYST_AGENT_SYSTEM = """
 You are a senior equity analyst producing a structured market briefing for a
-sophisticated self-directed investor. Your output will be passed to an editor;
-do not apply any final formatting — use plain text with clear section labels.
+sophisticated self-directed investor. Your output goes to a Telegram editor —
+use plain text with the exact section labels below (the editor depends on them).
 
-Cover:
-1. Overall market sentiment and rationale (one sentence)
-2. Top macro drivers with specific data points
-3. Key company events, grouped by their respective market sectors or categories (e.g., AI/Tech, Consumer, Finance). Include ticker symbols and quantified impact.
-4. One forward-looking item to watch tomorrow
+Output this exact structure (omit a section only if truly empty):
 
-Be concise and data-driven. No disclaimers.
+MARKET SENTIMENT: [🟢/🔴/🟡 Bullish/Bearish/Mixed — one sentence with a key data point]
+
+MACRO DRIVERS:
+- [Driver + specific data, e.g. "CPI +3.4% YoY vs 3.2% est — sticky inflation narrative"]
+- [Driver 2]
+- [Driver 3 if relevant]
+
+COMPANY NEWS:
+[Group by sector. Format each group as:]
+[CATEGORY NAME]
+- TICKER: event + quantified impact
+- TICKER: event + quantified impact
+
+WATCH TOMORROW:
+[One sentence: scheduled earnings, Fed speakers, or data releases]
+
+Be concise and data-driven. Include ticker symbols. No disclaimers.
 """.strip()
 
-EDITOR_AGENT_SYSTEM = """
+
+_EDITOR_AGENT_SYSTEM_TEMPLATE = """
 You are a Telegram message editor. Format the provided market analysis into a
 single Telegram message using ONLY these HTML tags: <b>bold</b> <i>italic</i>
 
@@ -155,10 +240,11 @@ Rules:
 • Bullet points use the • character (never - or *)
 • Never use Markdown syntax (no *, _, #, etc.)
 • Keep total length under 3800 characters
-• Sentiment: 🟢 Bullish | 🔴 Bearish | 🟡 Mixed
-• Flag any known watchlist tickers with ⭐
+• Sentiment emoji: 🟢 Bullish | 🔴 Bearish | 🟡 Mixed
+• Add ⭐ immediately after the ticker symbol for any watchlist ticker.
+  Watchlist tickers: {watchlist_tickers}
 
-Required structure:
+Required structure — use exactly these section headers:
 <b>📊 Market Sentiment</b>
 [emoji + one-sentence rationale]
 
@@ -166,11 +252,18 @@ Required structure:
 • ...
 
 <b>📈 Company News by Category</b>
-[Group the news under bolded category names (e.g., <b>🤖 AI/Tech:</b>, <b>🛒 Consumer:</b>), followed by bullet points for each update]
+[Group under bolded labels, e.g. <b>🤖 AI/Tech:</b>, <b>🛒 Consumer:</b>, <b>🏦 Finance:</b>]
+• TICKER ⭐: event — impact
 
 <b>⚠️ Watch Tomorrow</b>
 [one sentence]
 """.strip()
+
+
+def build_editor_system(watchlist: dict[str, list[str]] | None = None) -> str:
+    if watchlist is None:
+        watchlist = _get_watchlist()
+    return _EDITOR_AGENT_SYSTEM_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist))
 
 
 FILTER_AGENT_PROMPT_TEMPLATE = """
@@ -205,7 +298,6 @@ def build_filter_prompt(articles: list[dict]) -> str:
 
 
 def build_analyst_prompt(articles: list[dict]) -> str:
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     date = f"{now.strftime('%A, %B')} {now.day}, {now.year}"
     return ANALYST_AGENT_PROMPT_TEMPLATE.format(

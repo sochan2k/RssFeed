@@ -82,24 +82,63 @@ async def send_alert(text: str) -> None:
 # Command handlers
 # ---------------------------------------------------------------------------
 
+_HELP_TEXT = (
+    "<b>📊 Market Reports</b>\n"
+    "/summary — Full market digest (all watchlist)\n"
+    "/summary &lt;ticker|category&gt; — Filtered digest\n"
+    "  e.g. <code>/summary NVDA</code> or <code>/summary ai_tech</code>\n"
+    "/run — Full scheduled digest (3-agent chain)\n"
+    "/breaking — Breaking news (last 2h)\n"
+    "/breaking &lt;hours&gt; — e.g. <code>/breaking 6</code>\n"
+    "/ask &lt;question&gt; — Finance Q&amp;A grounded in today's news\n"
+    "\n"
+    "<b>📋 Watchlist</b>\n"
+    "/watchlist — View all categories and tickers\n"
+    "/add &lt;category&gt; &lt;ticker&gt; — e.g. <code>/add ai_tech MSFT</code>\n"
+    "/remove &lt;ticker&gt; — e.g. <code>/remove MSFT</code>\n"
+    "\n"
+    "<b>ℹ️ System</b>\n"
+    "/status — Last pipeline run\n"
+    "/status &lt;N&gt; — Last N runs, e.g. <code>/status 5</code>\n"
+    "/health — System metrics\n"
+    "/help — Show this message"
+)
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_html(
+        "Welcome to <b>StockDigest Bot</b> 📈\n\n"
+        "I deliver US financial market briefings powered by Gemini AI.\n"
+        "Scheduled digests run automatically; use commands for on-demand reports.\n\n"
+        + _HELP_TEXT
+    )
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_html(_HELP_TEXT)
+
+
+async def cmd_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger a full 3-agent scheduled digest."""
+    from src.pipeline import run as pipeline_run
+    await update.message.reply_text("Running full scheduled digest (3-agent chain), please wait…")
+    try:
+        summary = await pipeline_run(mode="scheduled")
+        await update.message.reply_html(summary)
+    except Exception as exc:
+        logger.error("cmd_run error: %s", exc)
+        await update.message.reply_text(f"Error: {exc}")
+
+
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.pipeline import run as pipeline_run
     target = context.args[0].lower() if context.args else None
-    
-    if target == "help":
-        await update.message.reply_text(
-            "Usage:\n"
-            "• /summary — Overall market and entire watchlist\n"
-            "• /summary <category> — Specific category (e.g. /summary ai)\n"
-            "• /summary <ticker> — Specific stock (e.g. /summary AAPL)"
-        )
-        return
-        
+
     if target:
-        await update.message.reply_text(f"Generating custom digest for '{target.upper()}', please wait…")
+        await update.message.reply_text(f"Generating digest for '{target.upper()}', please wait…")
     else:
         await update.message.reply_text("Generating market digest, please wait…")
-        
+
     try:
         summary = await pipeline_run(mode="ondemand", target=target)
         await update.message.reply_html(summary)
@@ -112,7 +151,7 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not question:
         await update.message.reply_text(
             "Usage: /ask <your question>\n"
-            "Example: /ask why did treasury yields jump and kill stocks today?"
+            "Example: /ask why did treasury yields jump today?"
         )
         return
 
@@ -125,7 +164,7 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from src.prompts import ASK_SYSTEM_PROMPT, build_ask_prompt
 
         articles = await fetch_articles()
-        filtered = filter_articles(articles)
+        filtered = filter_articles(articles, mark_seen=False)
         prompt = build_ask_prompt(question, filtered)
         answer = await generate(prompt, system_prompt=ASK_SYSTEM_PROMPT, use_cache=True)
         await update.message.reply_html(answer)
@@ -135,10 +174,14 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src.config import BREAKING_NEWS_HOURS
     from src.pipeline import run as pipeline_run
-    await update.message.reply_text("Fetching last 2 hours of news…")
+    hours = BREAKING_NEWS_HOURS
+    if context.args and context.args[0].isdigit():
+        hours = min(max(int(context.args[0]), 1), 24)
+    await update.message.reply_text(f"Fetching last {hours}h of news…")
     try:
-        summary = await pipeline_run(mode="breaking", hours_back=2)
+        summary = await pipeline_run(mode="breaking", hours_back=hours)
         await update.message.reply_html(summary)
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
@@ -149,68 +192,82 @@ async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     db.init_db()
     watchlist = db.get_watchlist()
     if not watchlist:
-        await update.message.reply_text("Watchlist is empty. Use /add <category> <ticker>")
+        await update.message.reply_text("Watchlist is empty.\nUse /add <category> <ticker> to add tickers.")
         return
 
     filter_cat = context.args[0].lower() if context.args else None
-    
     lines = []
+
     for cat, tickers in sorted(watchlist.items()):
         if filter_cat and cat != filter_cat:
             continue
-        lines.append(f"<b>{cat.title()}:</b> " + ", ".join(tickers))
-        
+        label = cat.replace("_", " ").title()
+        lines.append(f"<b>{label}</b> (<code>{cat}</code>): " + ", ".join(sorted(tickers)))
+
     if not lines:
-        await update.message.reply_text(f"No tickers found in category: {filter_cat}")
+        cats = ", ".join(f"<code>{c}</code>" for c in sorted(watchlist.keys()))
+        await update.message.reply_html(
+            f"No category named '<code>{filter_cat}</code>'.\n"
+            f"Available: {cats}"
+        )
         return
-        
+
+    cats_hint = ", ".join(f"<code>{c}</code>" for c in sorted(watchlist.keys()))
+    lines.append(f"\n<i>Use /summary &lt;category&gt; or /summary &lt;TICKER&gt;</i>")
+    lines.append(f"<i>Categories: {cats_hint}</i>")
     await update.message.reply_html("\n".join(lines))
 
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 2:
-        await update.message.reply_text("Usage: /add <category> <ticker>\nExample: /add ai NVDA")
+        await update.message.reply_text("Usage: /add <category> <ticker>\nExample: /add ai_tech MSFT")
         return
-    
+
     cat, ticker = context.args[0].lower(), context.args[1].upper()
     from src import db
     db.init_db()
     db.add_to_watchlist(cat, ticker)
-    await update.message.reply_html(f"✅ <b>{ticker}</b> has been added to the <b>{cat.title()}</b> watchlist.")
+    label = cat.replace("_", " ").title()
+    await update.message.reply_html(f"✅ <b>{ticker}</b> added to <b>{label}</b>.")
 
 
 async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 1:
         await update.message.reply_text("Usage: /remove <ticker>\nExample: /remove NVDA")
         return
-    
-    ticker = context.args[0]
+
+    ticker = context.args[0].upper()
     from src import db
     db.init_db()
     removed = db.remove_from_watchlist(ticker)
     if removed:
-        await update.message.reply_text(f"❌ {ticker.upper()} has been removed.")
+        await update.message.reply_text(f"Removed {ticker} from watchlist.")
     else:
-        await update.message.reply_text(f"Ticker {ticker.upper()} not found in watchlist.")
+        await update.message.reply_text(f"{ticker} not found in watchlist.")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src import db
     db.init_db()
-    run = db.get_last_run()
-    if not run:
+    n = 1
+    if context.args and context.args[0].isdigit():
+        n = min(max(int(context.args[0]), 1), 10)
+
+    runs = db.get_recent_runs(limit=n)
+    if not runs:
         await update.message.reply_text("No runs recorded yet.")
         return
-    status = "✓ Success" if run["success"] else "✗ Failed"
-    lines = [
-        f"Last run: {run['ran_at']} UTC",
-        f"Status:   {status}",
-        f"Fetched:  {run['articles_fetched']} articles",
-        f"Sent:     {run['articles_sent']} to Gemini",
-    ]
-    if run.get("error_message"):
-        lines.append(f"Error:    {run['error_message'][:200]}")
-    await update.message.reply_text("\n".join(lines))
+
+    header = f"Last {n} pipeline run(s):\n" if n > 1 else ""
+    lines = [header.rstrip()]
+    for i, run in enumerate(runs, 1):
+        status = "✓" if run["success"] else "✗"
+        ts = run["ran_at"][:19].replace("T", " ")
+        line = f"{i}. {ts} UTC — {status} {run['articles_fetched']} fetched / {run['articles_sent']} sent"
+        if run.get("error_message"):
+            line += f"\n   ⚠ {run['error_message'][:120]}"
+        lines.append(line)
+    await update.message.reply_text("\n".join(lines).strip())
 
 
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,25 +330,30 @@ async def run_bot() -> None:
     """Start the Telegram bot in polling mode (blocks until interrupted)."""
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("summary", cmd_summary))
+    app.add_handler(CommandHandler("breaking", cmd_breaking))
+    app.add_handler(CommandHandler("ask", cmd_ask))
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))
-    app.add_handler(CommandHandler("breaking", cmd_breaking))
-    app.add_handler(CommandHandler("ask", cmd_ask))
 
     async with app:
         await app.bot.set_my_commands([
-            BotCommand("summary", "Market digest (/summary [category/ticker])"),
-            BotCommand("watchlist", "View your categorized watchlist"),
-            BotCommand("add", "Add ticker (/add <group> <ticker>)"),
-            BotCommand("remove", "Remove ticker (/remove <ticker>)"),
-            BotCommand("breaking", "Last 2 hours of breaking news"),
-            BotCommand("ask", "Ask a finance question grounded in today's news"),
-            BotCommand("status", "Last run time and result"),
+            BotCommand("summary", "On-demand digest [category|ticker]"),
+            BotCommand("run", "Full scheduled digest (3-agent chain)"),
+            BotCommand("breaking", "Breaking news [hours, default 2]"),
+            BotCommand("ask", "Finance Q&A grounded in today's news"),
+            BotCommand("watchlist", "View watchlist by category"),
+            BotCommand("add", "Add ticker: /add <category> <ticker>"),
+            BotCommand("remove", "Remove ticker: /remove <ticker>"),
+            BotCommand("status", "Pipeline run history [N, default 1]"),
             BotCommand("health", "System metrics"),
+            BotCommand("help", "Show all commands"),
         ])
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)

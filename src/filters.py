@@ -31,25 +31,41 @@ def _similar(a: str, b: str) -> bool:
     return ratio >= HEADLINE_SIMILARITY_THRESHOLD
 
 
-def filter_articles(articles: list[dict], target: str | None = None) -> list[dict]:
+def _resolve_target(target: str, watchlist: dict[str, list[str]]) -> list[str]:
+    """
+    Map a user-supplied target string to a list of lowercase tickers.
+    Priority: exact category name → unique startswith match → raw ticker.
+    """
+    t = target.lower()
+    if t in watchlist:
+        return [tk.lower() for tk in watchlist[t]]
+    # startswith match — only use if exactly one category matches
+    matches = [cat for cat in watchlist if cat.startswith(t)]
+    if len(matches) == 1:
+        return [tk.lower() for tk in watchlist[matches[0]]]
+    return [t]  # treat as raw ticker / text search
+
+
+def filter_articles(
+    articles: list[dict],
+    target: str | None = None,
+    mark_seen: bool = True,
+) -> list[dict]:
     """
     3-layer filter:
       Layer 1 — heuristics: blacklist drop, watchlist score (drop score == 0)
       Layer 2a — URL hash dedup against SQLite seen_articles table
       Layer 2b — headline similarity dedup within the current batch
-    Returns the survivors, also marking them as seen in the DB.
+    mark_seen=False skips recording survivors in the seen_articles table,
+    so ondemand/breaking runs don't consume articles for the scheduled digest.
     """
     # Layer 1
     after_l1 = []
-    
+
     target_tickers = None
     if target:
-        target = target.lower()
         watchlist = db.get_watchlist()
-        if target in watchlist:
-            target_tickers = [t.lower() for t in watchlist[target]]
-        else:
-            target_tickers = [target]
+        target_tickers = _resolve_target(target, watchlist)
 
     for a in articles:
         if target_tickers:
@@ -76,8 +92,9 @@ def filter_articles(articles: list[dict], target: str | None = None) -> list[dic
         accepted.append(candidate)
     logger.info("Layer 2b (similarity): %d → %d", len(after_l2a), len(accepted))
 
-    # Mark survivors as seen
-    for a in accepted:
-        db.mark_seen(a["link"])
+    # Mark survivors as seen (skip for ondemand/breaking so scheduled digest isn't starved)
+    if mark_seen:
+        for a in accepted:
+            db.mark_seen(a["link"])
 
     return accepted

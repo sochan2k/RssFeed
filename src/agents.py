@@ -5,11 +5,11 @@ from src.config import AI_RELEVANCE_SCORE_THRESHOLD
 from src.gemini_client import generate
 from src.prompts import (
     ANALYST_AGENT_SYSTEM,
-    EDITOR_AGENT_SYSTEM,
-    FILTER_AGENT_SYSTEM,
     build_analyst_prompt,
     build_editor_prompt,
+    build_editor_system,
     build_filter_prompt,
+    build_filter_system,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ async def run_filter_agent(articles: list[dict]) -> list[dict]:
     prompt = build_filter_prompt(articles)
     raw = await generate(
         prompt,
-        system_prompt=FILTER_AGENT_SYSTEM,
+        system_prompt=build_filter_system(),
         use_cache=False,
         response_mime_type="application/json",
     )
@@ -59,4 +59,4 @@ async def run_analyst_agent(articles: list[dict]) -> str:
 async def run_editor_agent(analysis: str) -> str:
     """Polish raw analysis into final Telegram HTML."""
     prompt = build_editor_prompt(analysis)
-    return await generate(prompt, system_prompt=EDITOR_AGENT_SYSTEM, use_cache=False)
+    return await generate(prompt, system_prompt=build_editor_system(), use_cache=False)

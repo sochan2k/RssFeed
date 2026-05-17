@@ -5,7 +5,7 @@ from src.agents import run_analyst_agent, run_editor_agent, run_filter_agent
 from src.feeds import fetch_articles
 from src.filters import filter_articles
 from src.gemini_client import generate
-from src.prompts import SYSTEM_PROMPT, build_prompt
+from src.prompts import build_prompt, build_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def run(
         db.log_run(success=False, articles_fetched=0, articles_sent=0, error=msg)
         return msg
 
-    filtered = filter_articles(articles, target=target)
+    filtered = filter_articles(articles, target=target, mark_seen=(mode == "scheduled"))
 
     if not filtered:
         msg = "No significant market news today — all articles filtered out."
@@ -66,7 +66,7 @@ async def run(
             summary = await _run_agent_chain(filtered)
         else:
             prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target)
-            summary = await generate(prompt, system_prompt=SYSTEM_PROMPT, use_cache=True)
+            summary = await generate(prompt, system_prompt=build_system_prompt(), use_cache=True)
     except Exception as exc:
         error_msg = f"Gemini error: {exc}"
         logger.error(error_msg)
