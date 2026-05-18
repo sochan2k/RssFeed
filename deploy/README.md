@@ -9,7 +9,40 @@ Replace `USER` with your Pi username and `PI_HOST` with `raspberrypi.local` or t
 
 ## Step 1 — Transfer code from Windows
 
-Run these commands from your Windows machine (PowerShell or Git Bash):
+Choose **one** of the following options to copy the files to your Raspberry Pi:
+
+### Option A — The Zip + SCP Method (Recommended, No Git/Rsync needed)
+This is the easiest and cleanest way to transfer files from Windows using native PowerShell, as it bundles everything into a single compressed file and avoids copying heavy temporary or environment folders.
+
+1. **On Windows (PowerShell):** Open PowerShell in your project folder (`RssFeed/`) and run:
+   ```powershell
+   # Create a zip of only the required project files
+   Compress-Archive -Path .\main.py, .\requirements.txt, .\src, .\deploy, .\guides, .\.env.example -DestinationPath .\stock-digest.zip -Force
+
+   # Transfer the zip to your Pi (replace USER and PI_HOST with your Pi details)
+   scp .\stock-digest.zip USER@PI_HOST:~/
+
+   # Clean up the zip file from your Windows folder
+   Remove-Item .\stock-digest.zip
+   ```
+
+2. **On the Pi (via SSH):** Extract the project files:
+   ```bash
+   # Ensure unzip is installed
+   sudo apt update && sudo apt install unzip -y
+
+   # Create the target directory and extract the files
+   mkdir -p ~/stock-digest
+   unzip ~/stock-digest.zip -d ~/stock-digest
+
+   # Clean up the zip file on the Pi
+   rm ~/stock-digest.zip
+   ```
+
+---
+
+### Option B — Rsync (Fastest for subsequent updates, requires Git Bash or WSL)
+If you have Git Bash, WSL, or Rsync on Windows, you can sync files directly:
 
 ```bash
 # Copy project files; exclude the venv, local DB, and secrets
@@ -22,7 +55,26 @@ rsync -avz \
   ./ USER@PI_HOST:~/stock-digest/
 ```
 
-If you don't have `rsync` on Windows, use `scp -r` or push to Git and clone on the Pi.
+---
+
+### Option C — Graphical SFTP Client (FileZilla or WinSCP)
+If you prefer a visual interface, you can drag and drop:
+
+1. Download and open **WinSCP** or **FileZilla**.
+2. Connect to your Pi:
+   - **Protocol**: SFTP
+   - **Host Name**: `raspberrypi.local` (or the Pi's IP address)
+   - **Port**: `22`
+   - **Username / Password**: Your Pi credentials
+3. Navigate to `/home/USERNAME/` on the Pi (right pane) and create a directory named `stock-digest`.
+4. In the Windows pane (left), select and drag **only** the following files/folders to the Pi:
+   - `src/`
+   - `deploy/`
+   - `guides/`
+   - `main.py`
+   - `requirements.txt`
+   - `.env.example`
+   *(Do NOT drag `.git/`, `.venv/`, `data/`, `__pycache__/`, or `.env` to prevent workspace corruption or credential leakage)*
 
 ---
 
@@ -48,7 +100,11 @@ pip install -r requirements.txt
 nano ~/stock-digest/.env
 ```
 
-Paste your credentials (same format as `.env.example`):
+Paste your credentials (same format as `.env.example`).
+
+> [!IMPORTANT]
+> - Ensure your `TELEGRAM_CHAT_IDS` is completely correct (double check the length).
+> - Any notes you add manually to this file **must** begin with a `#` (e.g., `# To change the time`). Otherwise, `python-dotenv` will fail to parse the file.
 
 ```
 GEMINI_API_KEY=your_key_here
@@ -84,15 +140,16 @@ Check the output for `Pipeline complete.` and verify the Telegram message arrive
 Substitute `USER` in the unit files, then copy them to systemd:
 
 ```bash
-# Replace USER placeholder with your actual username in the service files
+# 1. Replace USER placeholder with your actual username (Do NOT run this with sudo, or $USER becomes root!)
 sed -i "s/USER/$USER/g" ~/stock-digest/deploy/stock-digest.service
 sed -i "s/USER/$USER/g" ~/stock-digest/deploy/stock-digest-bot.service
 
-# Copy to systemd
+# 2. Copy to systemd
 sudo cp ~/stock-digest/deploy/stock-digest.service     /etc/systemd/system/
 sudo cp ~/stock-digest/deploy/stock-digest.timer       /etc/systemd/system/
 sudo cp ~/stock-digest/deploy/stock-digest-bot.service /etc/systemd/system/
 
+# 3. Force systemd to register the new services (Fixes "Unit not found" errors)
 sudo systemctl daemon-reload
 ```
 
