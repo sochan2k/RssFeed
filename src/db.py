@@ -30,6 +30,13 @@ def init_db() -> None:
                 category          TEXT NOT NULL,
                 added_at          TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS digest_history (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                ran_at            TEXT NOT NULL,
+                mode              TEXT NOT NULL,
+                digest_text       TEXT NOT NULL,
+                tickers_mentioned TEXT
+            );
         """)
         
         # Seed watchlist if empty
@@ -128,6 +135,24 @@ def log_run(
             (datetime.now(timezone.utc).isoformat(), int(success),
              articles_fetched, articles_sent, error),
         )
+
+
+def save_digest(mode: str, digest_text: str, tickers: list[str] | None = None) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    tickers_str = ",".join(t.upper() for t in tickers) if tickers else ""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO digest_history (ran_at, mode, digest_text, tickers_mentioned) VALUES (?, ?, ?, ?)",
+            (now, mode, digest_text, tickers_str),
+        )
+
+
+def get_recent_digests(limit: int = 5) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM digest_history ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def get_last_run() -> dict | None:

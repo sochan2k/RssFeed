@@ -15,16 +15,18 @@ async def _run_agent_chain(articles: list[dict]) -> str:
     3-agent scheduled digest path:
       Filter Agent  → score & prune to high-impact articles
       Analyst Agent → generate structured plain-text analysis
-      Editor Agent  → reformat into Telegram HTML
+      Editor Agent  → reformat into Telegram HTML (with digest history injected)
     """
+    history = db.get_recent_digests(limit=3)
+
     logger.info("Agent chain: starting filter agent (%d articles)", len(articles))
     high_impact = await run_filter_agent(articles)
 
     logger.info("Agent chain: starting analyst agent (%d articles)", len(high_impact))
     analysis = await run_analyst_agent(high_impact)
 
-    logger.info("Agent chain: starting editor agent")
-    return await run_editor_agent(analysis)
+    logger.info("Agent chain: starting editor agent (history=%d)", len(history))
+    return await run_editor_agent(analysis, history=history)
 
 
 async def run(
@@ -64,6 +66,7 @@ async def run(
     try:
         if mode == "scheduled":
             summary = await _run_agent_chain(filtered)
+            db.save_digest("scheduled", summary)
         else:
             prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target)
             summary = await generate(prompt, system_prompt=build_system_prompt(), use_cache=True)

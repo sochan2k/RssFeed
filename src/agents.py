@@ -59,7 +59,7 @@ async def run_analyst_agent(articles: list[dict]) -> str:
     return await generate(prompt, system_prompt=ANALYST_AGENT_SYSTEM, use_cache=False)
 
 
-async def run_editor_agent(analysis: str) -> str:
+async def run_editor_agent(analysis: str, history: list[dict] | None = None) -> str:
     """Polish raw analysis into final Telegram HTML."""
-    prompt = build_editor_prompt(analysis)
-    return await generate(prompt, system_prompt=build_editor_system(), use_cache=False)
+    prompt = build_editor_prompt(analysis, history=history)
+    return await generate(prompt, system_prompt=build_editor_system(), use_cache=True)

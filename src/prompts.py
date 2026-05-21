@@ -1,6 +1,9 @@
+import re
 from datetime import datetime, timezone
 
 from src.config import DEFAULT_WATCHLIST
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +286,21 @@ Today is {date} (ICT, UTC+7). Produce a structured market briefing from these
 """.strip()
 
 EDITOR_AGENT_PROMPT_TEMPLATE = """
-Reformat the following market analysis into the required Telegram HTML structure.
+Reformat the following market analysis into the required Telegram HTML structure.{history_block}
 
 --- ANALYSIS ---
 {analysis}
+""".strip()
+
+_HISTORY_BLOCK_TEMPLATE = """
+
+RECENT DIGEST HISTORY (last {n} scheduled run(s) — oldest first):
+{history}
+
+MEMORY INSTRUCTIONS:
+• Do not repeat stories already covered in recent digests. Drop them entirely.
+• If the same ticker appears again today with new developments, frame it as a continuation: "TICKER continues its [trend] — [today's new detail]".
+• Check the Watch Tomorrow line from the most recent digest — if today's news resolves it, note the outcome briefly (e.g. "materialised", "missed", "pending").
 """.strip()
 
 
@@ -307,8 +321,25 @@ def build_analyst_prompt(articles: list[dict]) -> str:
     )
 
 
-def build_editor_prompt(analysis: str) -> str:
-    return EDITOR_AGENT_PROMPT_TEMPLATE.format(analysis=analysis)
+def _format_history(history: list[dict]) -> str:
+    lines = []
+    for entry in reversed(history):  # oldest first
+        date = entry["ran_at"][:10]
+        clean = _HTML_TAG_RE.sub("", entry["digest_text"])
+        preview = " ".join(clean.split())[:300]
+        lines.append(f"[{date}]: {preview}…")
+    return "\n".join(lines)
+
+
+def build_editor_prompt(analysis: str, history: list[dict] | None = None) -> str:
+    if history:
+        history_block = "\n\n" + _HISTORY_BLOCK_TEMPLATE.format(
+            n=len(history),
+            history=_format_history(history),
+        )
+    else:
+        history_block = ""
+    return EDITOR_AGENT_PROMPT_TEMPLATE.format(analysis=analysis, history_block=history_block)
 
 
 # ---------------------------------------------------------------------------

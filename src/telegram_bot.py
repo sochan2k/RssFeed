@@ -106,6 +106,8 @@ _HELP_TEXT = (
     "/remove &lt;ticker&gt; — e.g. <code>/remove MSFT</code>\n"
     "\n"
     "<b>ℹ️ System</b>\n"
+    "/history — Last 3 digests\n"
+    "/history &lt;N&gt; — Last N digests, e.g. <code>/history 5</code>\n"
     "/status — Last pipeline run\n"
     "/status &lt;N&gt; — Last N runs, e.g. <code>/status 5</code>\n"
     f"/health — System metrics + next scheduled digest\n"
@@ -259,6 +261,26 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(f"{ticker} not found in watchlist.")
 
 
+async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src import db
+    db.init_db()
+    n = 3
+    if context.args and context.args[0].isdigit():
+        n = min(max(int(context.args[0]), 1), 7)
+
+    entries = db.get_recent_digests(limit=n)
+    if not entries:
+        await update.message.reply_text(
+            "No digest history yet.\nRun /run to generate the first scheduled digest."
+        )
+        return
+
+    for entry in reversed(entries):  # oldest first
+        ts = entry["ran_at"][:16].replace("T", " ") + " UTC"
+        header = f"<b>📅 {ts}</b>\n\n"
+        await update.message.reply_html(header + entry["digest_text"][:3800])
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src import db
     db.init_db()
@@ -395,6 +417,7 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
+    app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))
 
@@ -407,6 +430,7 @@ async def run_bot() -> None:
             BotCommand("watchlist", "View watchlist by category"),
             BotCommand("add", "Add ticker: /add <category> <ticker>"),
             BotCommand("remove", "Remove ticker: /remove <ticker>"),
+            BotCommand("history", "Recent digests [N, default 3]"),
             BotCommand("status", "Pipeline run history [N, default 1]"),
             BotCommand("health", "System metrics"),
             BotCommand("help", "Show all commands"),
