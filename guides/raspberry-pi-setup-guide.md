@@ -164,7 +164,6 @@ Useful options for OS Lite users:
 | System Options | Hostname | Change the device name on your network |
 | Interface Options | SSH | Confirm SSH is enabled |
 | Interface Options | I2C / SPI | Enable hardware interfaces for sensors |
-| Performance Options | GPU Memory | Set to `16` MB (saves RAM — no desktop needed) |
 | Localisation Options | Timezone | Set your local time |
 | Advanced Options | Expand Filesystem | Use the full SD card capacity |
 
@@ -175,6 +174,16 @@ sudo reboot
 ```
 
 Reconnect via SSH after ~30 seconds.
+
+> **GPU Memory on Bookworm (64-bit):** The GPU Memory option was removed from `raspi-config` in Raspberry Pi OS Bookworm. Set it directly in the config file instead:
+> ```bash
+> sudo nano /boot/firmware/config.txt
+> ```
+> Add at the bottom:
+> ```
+> gpu_mem=16
+> ```
+> Save and reboot. Verify with `vcgencmd get_mem gpu` — should return `gpu=16M`. This frees ~48 MB back to the system since OS Lite has no desktop.
 
 ---
 
@@ -214,39 +223,20 @@ sudo reboot
 
 ---
 
-## Step 10: Enable zram (Compressed RAM Swap)
+## Step 10: Verify zram (Compressed RAM Swap)
 
-The Pi Zero 2 W has only 512 MB of RAM. `zram` creates a compressed swap device in RAM, preventing out-of-memory crashes without writing to the SD card:
+The Pi Zero 2 W has only 512 MB of RAM. `zram` creates a compressed swap device in RAM, preventing out-of-memory crashes without writing to the SD card.
 
-```bash
-sudo apt install zram-tools -y
-```
+**Raspberry Pi OS Bookworm enables zram automatically.** Do not install `zram-tools` — it conflicts with the built-in service and will fail with a "Device or resource busy" error.
 
-Configure it:
-
-```bash
-sudo nano /etc/default/zramswap
-```
-
-Set:
-
-```
-ALGO=lz4
-PERCENT=50
-```
-
-Enable and start:
-
-```bash
-sudo systemctl enable zramswap
-sudo systemctl start zramswap
-```
-
-Verify it's running:
+Just verify zram is already active:
 
 ```bash
 zramctl
+swapon --show
 ```
+
+You should see `/dev/zram0` listed with a size of ~463 MB and algorithm `zstd`. If it shows up, you're done — nothing else to configure.
 
 ---
 
@@ -353,15 +343,17 @@ This step installs and runs the actual application on the Pi. Complete Steps 1�
 
 ```bash
 cd ~
-git clone https://github.com/YOUR-USERNAME/stock-digest.git
+git clone https://github.com/sochan2k/RssFeed.git stock-digest
 cd stock-digest
 ```
 
-> Replace the URL with your actual repository URL. If the repo is private, authenticate first:
+> Cloning as `stock-digest` so the paths in the systemd unit files match without modification.
+> If the repo is private, save credentials first:
 > ```bash
 > git config --global credential.helper store
-> git clone https://github.com/YOUR-USERNAME/stock-digest.git
-> # Enter your GitHub username and a personal access token when prompted
+> git clone https://github.com/sochan2k/RssFeed.git stock-digest
+> # Enter your GitHub username and a Personal Access Token when prompted
+> # GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → scope: repo
 > ```
 
 ### 2. Create a virtual environment and install dependencies
@@ -416,17 +408,17 @@ Press `Ctrl+C` to stop it once you confirm it responds to `/start`.
 The `deploy/` folder contains ready-made unit files. Copy them, substitute your username, then enable:
 
 ```bash
-# Replace USER with your actual Pi username throughout
-USERNAME=$(whoami)
+# 1. Substitute USER placeholder — run WITHOUT sudo so $USER is your login name, not root
+sed -i "s/USER/$USER/g" ~/stock-digest/deploy/stock-digest.service
+sed -i "s/USER/$USER/g" ~/stock-digest/deploy/stock-digest-bot.service
 
-sudo cp deploy/stock-digest.service /etc/systemd/system/
-sudo cp deploy/stock-digest.timer   /etc/systemd/system/
-sudo cp deploy/stock-digest-bot.service /etc/systemd/system/
+# 2. Copy unit files to systemd
+sudo cp ~/stock-digest/deploy/stock-digest.service     /etc/systemd/system/
+sudo cp ~/stock-digest/deploy/stock-digest.timer       /etc/systemd/system/
+sudo cp ~/stock-digest/deploy/stock-digest-bot.service /etc/systemd/system/
 
-# Substitute the placeholder USER with your actual username
-sudo sed -i "s/USER/$USERNAME/g" /etc/systemd/system/stock-digest.service
-sudo sed -i "s/USER/$USERNAME/g" /etc/systemd/system/stock-digest.timer
-sudo sed -i "s/USER/$USERNAME/g" /etc/systemd/system/stock-digest-bot.service
+# 3. Register the new units
+sudo systemctl daemon-reload
 ```
 
 Reload systemd and enable both the scheduled pipeline and the bot:
@@ -471,7 +463,9 @@ The bot is live when you see `Application started` in the logs and your Pi respo
 | Can't find Wi-Fi | Wrong credentials | Re-check SSID and password in settings |
 | Slow performance | Overheating | The Zero 2 W runs warm — add a heatsink; ensure good ventilation |
 | SSH connection refused | SSH not enabled | Re-flash with SSH enabled in Imager settings |
-| Out of memory errors | 512 MB limit hit | Ensure zram is running (`zramctl`); reduce concurrent processes |
+| SSH "host key changed" warning | SD card was re-flashed — new host key | Run `ssh-keygen -R rasppi.local` on your PC, then reconnect |
+| Out of memory errors | 512 MB limit hit | Confirm zram is active (`zramctl`); do not install `zram-tools` on Bookworm |
+| `zramswap.service` failed | Bookworm has built-in zram; `zram-tools` conflicts | Remove with `sudo apt remove zram-tools -y`; verify with `zramctl` |
 
 ---
 
