@@ -264,15 +264,15 @@ sudo apt install curl wget net-tools -y
 
 ```bash
 mkdir ~/myapp && cd ~/myapp
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 Always activate the venv before installing project dependencies:
 
 ```bash
 # Example: install project libraries
-pip install feedparser aiohttp google-genai python-telegram-bot tenacity holidays
+pip install feedparser aiohttp google-genai python-telegram-bot tenacity holidays python-dotenv
 ```
 
 **Check system health:**
@@ -298,13 +298,14 @@ sudo nano /etc/systemd/system/myapp.service
 [Unit]
 Description=My App Script
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=your-username
 WorkingDirectory=/home/your-username/myapp
-ExecStart=/home/your-username/myapp/venv/bin/python main.py
-Restart=on-failure
+ExecStart=/home/your-username/myapp/.venv/bin/python main.py
+Environment=PYTHONUNBUFFERED=1
 ```
 
 ```bash
@@ -337,9 +338,11 @@ sudo systemctl list-timers   # verify it's scheduled
 
 ## Step 13: Clone and Deploy the Stock Digest App
 
-This step installs and runs the actual application on the Pi. Complete Steps 1–12 first.
+This step clones the application from GitHub to the Pi and wires up automation. Complete Steps 1–12 first.
 
 ### 1. Clone the repository
+
+On the Pi (via SSH):
 
 ```bash
 cd ~
@@ -348,29 +351,33 @@ cd stock-digest
 ```
 
 > Cloning as `stock-digest` so the paths in the systemd unit files match without modification.
-> If the repo is private, save credentials first:
-> ```bash
-> git config --global credential.helper store
-> git clone https://github.com/sochan2k/RssFeed.git stock-digest
-> # Enter your GitHub username and a Personal Access Token when prompted
-> # GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → scope: repo
-> ```
+For a **private repo**, save your credentials first so you're not prompted every time:
+
+```bash
+git config --global credential.helper store
+git clone https://github.com/sochan2k/RssFeed.git stock-digest
+# Enter your GitHub username and a Personal Access Token when prompted
+```
+
+Personal Access Tokens: GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → New token → scope: `repo`.
 
 ### 2. Create a virtual environment and install dependencies
 
 ```bash
+cd ~/stock-digest
 python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> On the Pi Zero 2 W, `pip install` may take a few minutes. If you see memory errors, make sure zram is running (`zramctl`).
+> On the Pi Zero 2 W, `pip install` takes 2–5 minutes. If you see memory errors, confirm zram is running (`zramctl`).
 
 ### 3. Configure environment variables
 
 ```bash
-cp .env.example .env
-nano .env
+cp ~/stock-digest/.env.example ~/stock-digest/.env
+nano ~/stock-digest/.env
 ```
 
 Fill in all four values:
@@ -382,18 +389,25 @@ TELEGRAM_CHAT_IDS=123456789
 ADMIN_CHAT_ID=123456789
 ```
 
-Save and exit (`Ctrl+X`, `Y`, `Enter`).
-
-### 4. Test the app runs correctly
-
-Run the pipeline once manually to confirm everything works end-to-end:
+Save and exit (`Ctrl+X`, `Y`, `Enter`), then restrict permissions:
 
 ```bash
-source .venv/bin/activate
-python main.py --mode scheduled
+chmod 600 ~/stock-digest/.env
 ```
 
-You should see log output and receive a Telegram message. If there are errors, check your `.env` values and network connection.
+> Any comments you add to `.env` must start with `#` — otherwise `python-dotenv` will fail to parse the file.
+
+### 4. Smoke-test the app
+
+Run the pipeline once with `--force` to bypass the trading-day check:
+
+```bash
+cd ~/stock-digest
+source .venv/bin/activate
+python main.py --mode scheduled --force
+```
+
+You should see `Pipeline complete.` in the logs and a digest message arrive in Telegram. If there are errors, check your `.env` values and network connection.
 
 To test the Telegram bot (interactive commands):
 
@@ -405,51 +419,68 @@ Press `Ctrl+C` to stop it once you confirm it responds to `/start`.
 
 ### 5. Deploy with systemd
 
-The `deploy/` folder contains ready-made unit files. Copy them, substitute your username, then enable:
+The `deploy/` folder contains ready-made unit files. Substitute your username into them first (**without** `sudo` — otherwise `$USER` resolves to `root`), then copy to systemd:
 
 ```bash
+cd ~/stock-digest
+
 # 1. Substitute USER placeholder — run WITHOUT sudo so $USER is your login name, not root
-sed -i "s/USER/$USER/g" ~/stock-digest/deploy/stock-digest.service
-sed -i "s/USER/$USER/g" ~/stock-digest/deploy/stock-digest-bot.service
+sed -i "s/USER/$USER/g" deploy/stock-digest.service
+sed -i "s/USER/$USER/g" deploy/stock-digest-bot.service
 
 # 2. Copy unit files to systemd
-sudo cp ~/stock-digest/deploy/stock-digest.service     /etc/systemd/system/
-sudo cp ~/stock-digest/deploy/stock-digest.timer       /etc/systemd/system/
-sudo cp ~/stock-digest/deploy/stock-digest-bot.service /etc/systemd/system/
+sudo cp deploy/stock-digest.service     /etc/systemd/system/
+sudo cp deploy/stock-digest.timer       /etc/systemd/system/
+sudo cp deploy/stock-digest-bot.service /etc/systemd/system/
 
 # 3. Register the new units
 sudo systemctl daemon-reload
 ```
 
-Reload systemd and enable both the scheduled pipeline and the bot:
+Enable and start both services:
 
 ```bash
-sudo systemctl daemon-reload
-
 # Scheduled digest (timer fires Mon–Fri at 13:00 UTC and 22:00 UTC)
 sudo systemctl enable stock-digest.timer
-sudo systemctl start stock-digest.timer
+sudo systemctl start  stock-digest.timer
 
 # Telegram bot (always-on, restarts automatically on failure)
 sudo systemctl enable stock-digest-bot.service
-sudo systemctl start stock-digest-bot.service
+sudo systemctl start  stock-digest-bot.service
 ```
 
 ### 6. Verify everything is running
 
 ```bash
-# Check the timer is scheduled
+# Confirm the timer shows two upcoming triggers
 sudo systemctl list-timers stock-digest.timer
 
-# Check the bot service is active
+# Check the bot is active
 sudo systemctl status stock-digest-bot.service
 
-# Tail live logs
+# Follow live logs
 sudo journalctl -u stock-digest-bot.service -f
 sudo journalctl -u stock-digest.service -f
 ```
 
 The bot is live when you see `Application started` in the logs and your Pi responds to `/start` in Telegram.
+
+### Redeploying after code changes
+
+Push from Windows:
+
+```powershell
+git push
+```
+
+Then on the Pi:
+
+```bash
+cd ~/stock-digest
+git pull
+sudo systemctl restart stock-digest-bot.service
+# No restart needed for the digest service — it's oneshot and re-reads code on each run
+```
 
 ---
 
@@ -471,7 +502,7 @@ The bot is live when you see `Application started` in the logs and your Pi respo
 
 ## Next Steps
 
-This setup is the foundation for the **Daily US Stock News Summarizer** (see Step 13 above):
+This setup is the foundation for the **Daily US Stock News Summarizer** (see Step 13 above and `deploy/README.md` for the full deployment checklist):
 
 - **RSS Feed Fetcher** — async `feedparser` + `aiohttp` pulling financial news
 - **AI Summarizer** — Gemini API call with a filtered news digest
