@@ -29,11 +29,12 @@ ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", TELEGRAM_CHAT_IDS[0]))
 # --- Gemini Model Fallback Chain ---
 # Tried in order; falls back on ResourceExhausted / ServiceUnavailable
 GEMINI_MODELS: list[str] = [
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
+    "gemini-3.0-flash",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemma-4-31b-it",
-    "gemini-3.0-flash",
 ]
 
 # --- Watchlist & Macro Terms ---
