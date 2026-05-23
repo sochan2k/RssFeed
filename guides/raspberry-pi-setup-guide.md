@@ -351,7 +351,6 @@ cd stock-digest
 ```
 
 > Cloning as `stock-digest` so the paths in the systemd unit files match without modification.
-
 For a **private repo**, save your credentials first so you're not prompted every time:
 
 ```bash
@@ -425,7 +424,7 @@ The `deploy/` folder contains ready-made unit files. Substitute your username in
 ```bash
 cd ~/stock-digest
 
-# 1. Substitute USER placeholder (no sudo — $USER must be your login name)
+# 1. Substitute USER placeholder — run WITHOUT sudo so $USER is your login name, not root
 sed -i "s/USER/$USER/g" deploy/stock-digest.service
 sed -i "s/USER/$USER/g" deploy/stock-digest-bot.service
 
