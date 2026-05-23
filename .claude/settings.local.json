@@ -23,7 +23,8 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(python -m pytest --tb=short -q)",
-      "Bash(python -c \"from src.db import save_digest, get_recent_digests; from src.prompts import build_editor_prompt; from src.agents import run_editor_agent; print\\('imports OK'\\)\")"
+      "Bash(python -c \"from src.db import save_digest, get_recent_digests; from src.prompts import build_editor_prompt; from src.agents import run_editor_agent; print\\('imports OK'\\)\")",
+      "Bash(git commit *)"
     ]
   },
   "skillOverrides": {
