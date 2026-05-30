@@ -24,3 +24,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Guard against the repo being accidentally cloned into itself again
+/RssFeed/
