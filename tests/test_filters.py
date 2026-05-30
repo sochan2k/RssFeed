@@ -10,6 +10,11 @@ def _article(title: str, summary: str = "", link: str = "https://example.com/a")
     return {"title": title, "summary": summary, "link": link, "published_utc": None, "source": "test"}
 
 
+# Sample ticker list passed to _watchlist_score (the function takes a pre-fetched
+# list so it doesn't hit the DB per article — see filters.py).
+_TICKERS = ["AAPL", "NVDA", "MSFT", "GOOG", "TSLA"]
+
+
 # ---------------------------------------------------------------------------
 # _is_blacklisted
 # ---------------------------------------------------------------------------
@@ -34,16 +39,16 @@ class TestIsBlacklisted:
 
 class TestWatchlistScore:
     def test_watchlist_ticker_scores(self):
-        assert _watchlist_score(_article("AAPL stock rises after earnings")) >= 1
+        assert _watchlist_score(_article("AAPL stock rises after earnings"), _TICKERS) >= 1
 
     def test_macro_term_scores(self):
-        assert _watchlist_score(_article("Fed raises interest rate by 25bps")) >= 1
+        assert _watchlist_score(_article("Fed raises interest rate by 25bps"), _TICKERS) >= 1
 
     def test_irrelevant_article_scores_zero(self):
-        assert _watchlist_score(_article("Local restaurant opens downtown")) == 0
+        assert _watchlist_score(_article("Local restaurant opens downtown"), _TICKERS) == 0
 
     def test_multiple_matches_additive(self):
-        score = _watchlist_score(_article("NVDA MSFT earnings beat; Fed holds rate"))
+        score = _watchlist_score(_article("NVDA MSFT earnings beat; Fed holds rate"), _TICKERS)
         assert score >= 3
 
 
@@ -73,6 +78,15 @@ class TestSimilar:
 # ---------------------------------------------------------------------------
 
 class TestFilterArticles:
+    @pytest.fixture(autouse=True)
+    def _patch_watchlist(self):
+        """Pin the watchlist so tests don't depend on live DB state (mutable via /add)."""
+        with patch(
+            "src.filters.db.get_watchlist",
+            return_value={"ai_tech": ["NVDA", "AAPL", "MSFT"]},
+        ):
+            yield
+
     def _make_articles(self, specs: list[tuple]) -> list[dict]:
         """specs: list of (title, link) tuples"""
         return [_article(title, link=link) for title, link in specs]

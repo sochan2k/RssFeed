@@ -27,6 +27,32 @@ def _flat_tickers(watchlist: dict[str, list[str]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Thai localization helpers
+# ---------------------------------------------------------------------------
+
+# Shared language directive appended to every prose-producing system prompt.
+# (Not applied to the filter agent, which emits JSON only.)
+_THAI_DIRECTIVE = """
+
+LANGUAGE: Write all prose in natural, professional Thai (the formal financial
+register used by Thai investment analysts). Keep these in their original Latin
+form — do NOT translate or romanize them: ticker symbols, company and index
+names, numbers, currencies, percentages, basis points, and all HTML tags.
+Do not transliterate ticker symbols into Thai script.
+""".rstrip()
+
+_THAI_MONTHS = (
+    "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+    "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+)
+
+
+def _thai_date(now: datetime) -> str:
+    """Format a date in Thai with a Gregorian (ค.ศ.) year, e.g. '30 พฤษภาคม 2026'."""
+    return f"{now.day} {_THAI_MONTHS[now.month - 1]} {now.year}"
+
+
+# ---------------------------------------------------------------------------
 # System prompts (dynamic — watchlist injected at call time)
 # ---------------------------------------------------------------------------
 
@@ -58,9 +84,16 @@ CONTENT RULES:
 3. Always include the stock ticker symbol in parentheses, e.g. Apple (AAPL).
 4. Express sentiment as one of: 🟢 Bullish | 🔴 Bearish | 🟡 Mixed.
 5. Quantify where possible: percentages, dollar amounts, EPS figures, rate
-   basis points.
+   basis points. State the surprise vs. consensus (beat/miss magnitude) when known.
 6. Add ⭐ immediately after the ticker symbol for any watchlist ticker, e.g. NVDA ⭐.
 7. If no genuinely market-moving news exists, say so clearly in one sentence.
+
+PRIORITY: When space is tight, weight items in this order — monetary policy
+(Fed/FOMC) > broad macro data (CPI, jobs, GDP) > sector/regulatory shifts >
+single-company news. Lead with the single biggest market mover.
+
+NEUTRALITY: Report facts, not hype. Avoid cheerleading adjectives; let the
+numbers carry the sentiment. Separate confirmed events from speculation.
 
 PROHIBITED: Do not add disclaimers, legal boilerplate, or suggestions to
 consult a financial advisor. The user knows investing involves risk.
@@ -71,7 +104,7 @@ def build_system_prompt(watchlist: dict[str, list[str]] | None = None) -> str:
     """Build system prompt with the live watchlist injected."""
     if watchlist is None:
         watchlist = _get_watchlist()
-    return _SYSTEM_PROMPT_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist))
+    return _SYSTEM_PROMPT_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist)) + _THAI_DIRECTIVE
 
 
 # ---------------------------------------------------------------------------
@@ -79,23 +112,23 @@ def build_system_prompt(watchlist: dict[str, list[str]] | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 SCHEDULED_PROMPT_TEMPLATE = """
-Today is {date} (ICT, UTC+7). Below are the latest US financial news headlines
-and summaries collected in the past 24 hours. Produce a daily market briefing
-with the following structure:
+Today is {date} (เวลาประเทศไทย, UTC+7). Below are the latest US financial news
+headlines and summaries collected in the past 24 hours. Produce a daily market
+briefing (in Thai) with the following structure — use these exact Thai headers:
 
-<b>📊 Market Sentiment</b>
+<b>📊 ภาพรวมตลาด</b>
 [🟢/🔴/🟡 Bullish/Bearish/Mixed — one sentence rationale]
 
-<b>🏛 Top Macro Drivers</b>
+<b>🏛 ปัจจัยมหภาคสำคัญ</b>
 • [Driver 1 with data point]
 • [Driver 2 with data point]
 • [Driver 3 with data point]
 
-<b>📈 Key Company News</b>
+<b>📈 ข่าวบริษัทเด่น</b>
 • [Ticker + event + impact]
 • ...
 
-<b>⚠️ Watch Tomorrow</b>
+<b>⚠️ จับตาวันพรุ่งนี้</b>
 [One sentence: scheduled events — earnings calls, Fed speakers, data releases]
 
 --- NEWS FEED START ---
@@ -104,16 +137,16 @@ with the following structure:
 """.strip()
 
 ONDEMAND_PROMPT_TEMPLATE = """
-Today is {date} (ICT, UTC+7). The user requested an on-demand digest {target_text}.
-Produce a compact briefing — shorter than the scheduled digest. Limit to 2000 characters.
+Today is {date} (เวลาประเทศไทย, UTC+7). The user requested an on-demand digest
+{target_text}. Produce a compact briefing (in Thai) — shorter than the scheduled
+digest. Limit to 2000 characters. Use these exact Thai headers:
 
-Structure:
-<b>📊 Sentiment:</b> [🟢/🔴/🟡 + one sentence]
+<b>📊 ภาพรวม:</b> [🟢/🔴/🟡 + one sentence]
 
-<b>📌 Top Items</b>
+<b>📌 ประเด็นเด่น</b>
 • [3–5 most important bullet points, lead with the biggest mover]
 
-<b>⚠️ Watch:</b> [one forward-looking sentence]
+<b>⚠️ จับตา:</b> [one forward-looking sentence]
 
 Use the same Telegram HTML formatting rules from your system instructions.
 
@@ -123,8 +156,8 @@ Use the same Telegram HTML formatting rules from your system instructions.
 """.strip()
 
 BREAKING_PROMPT_TEMPLATE = """
-Today is {date} (ICT, UTC+7). The user requested a BREAKING NEWS digest
-covering only the past {hours} hours.
+Today is {date} (เวลาประเทศไทย, UTC+7). The user requested a BREAKING NEWS digest
+covering only the past {hours} hours. Write the bullets in Thai.
 
 STRUCTURE OVERRIDE: Output bullet points only — no section headers, no
 sentiment block, no Watch Tomorrow line. Lead with the most market-moving
@@ -143,7 +176,7 @@ def build_prompt(
     target: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
-    date = f"{now.strftime('%A, %B')} {now.day}, {now.year}"
+    date = _thai_date(now)
     articles_block = _format_articles(articles)
 
     if mode == "breaking":
@@ -193,6 +226,14 @@ Score each article 1–10 on its potential to move stock prices:
   5–6  = Medium: Minor company news, routine scheduled event, sector rotation commentary
   1–4  = Low: Opinion piece, soft/vague news, press release fluff, duplicate angle
 
+SCORING NUANCE:
+- Weight by surprise: a large deviation from consensus (big guidance cut, sharp
+  beat/miss) scores higher than an in-line result.
+- Favor forward-looking catalysts (guidance, outlook, scheduled decisions) over
+  already-released, backward-looking recaps of the same event.
+- A second article on an event already represented in the batch is a duplicate —
+  score it Low.
+
 BONUS: Add +1 (cap at 10) for any article that directly mentions a watchlist ticker.
 User's watchlist tickers: {watchlist_tickers}
 
@@ -231,8 +272,18 @@ COMPANY NEWS:
 WATCH TOMORROW:
 [One sentence: scheduled earnings, Fed speakers, or data releases]
 
+QUALITY BAR:
+- Weight impact in this order: monetary policy (Fed/FOMC) > broad macro data
+  (CPI, jobs, GDP) > sector/regulatory shifts > single-company news.
+- Quantify against consensus: beat/miss magnitude, bps moves, % change — not
+  just direction.
+- Flag sector rotation when the news points to it (e.g. defensive rotation on
+  growth fears).
+- Distinguish a structural catalyst from one-day noise; say which.
+- Neutral tone: report facts, no cheerleading. Separate confirmed from speculative.
+
 Be concise and data-driven. Include ticker symbols. No disclaimers.
-""".strip()
+""".strip() + _THAI_DIRECTIVE
 
 
 _EDITOR_AGENT_SYSTEM_TEMPLATE = """
@@ -247,26 +298,31 @@ Rules:
 • Add ⭐ immediately after the ticker symbol for any watchlist ticker.
   Watchlist tickers: {watchlist_tickers}
 
-Required structure — use exactly these section headers:
-<b>📊 Market Sentiment</b>
+Required structure — use exactly these Thai section headers:
+<b>📊 ภาพรวมตลาด</b>
 [emoji + one-sentence rationale]
 
-<b>🏛 Top Macro Drivers</b>
+<b>🏛 ปัจจัยมหภาคสำคัญ</b>
 • ...
 
-<b>📈 Company News by Category</b>
+<b>📈 ข่าวบริษัทเด่น</b>
 [Group under bolded labels, e.g. <b>🤖 AI/Tech:</b>, <b>🛒 Consumer:</b>, <b>🏦 Finance:</b>]
 • TICKER ⭐: event — impact
 
-<b>⚠️ Watch Tomorrow</b>
+<b>⚠️ จับตาวันพรุ่งนี้</b>
 [one sentence]
+
+PRESENTATION:
+• Lead with the single biggest market mover.
+• Keep bullets in parallel structure; one idea per bullet.
+• Use precise verbs and concrete numbers, not hype.
 """.strip()
 
 
 def build_editor_system(watchlist: dict[str, list[str]] | None = None) -> str:
     if watchlist is None:
         watchlist = _get_watchlist()
-    return _EDITOR_AGENT_SYSTEM_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist))
+    return _EDITOR_AGENT_SYSTEM_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist)) + _THAI_DIRECTIVE
 
 
 FILTER_AGENT_PROMPT_TEMPLATE = """
@@ -278,8 +334,8 @@ with {n} objects: [{{"index": 0, "score": X}}, ...].
 """.strip()
 
 ANALYST_AGENT_PROMPT_TEMPLATE = """
-Today is {date} (ICT, UTC+7). Produce a structured market briefing from these
-{n} high-impact articles.
+Today is {date} (เวลาประเทศไทย, UTC+7). Produce a structured market briefing from
+these {n} high-impact articles.
 
 --- ARTICLES ---
 {articles}
@@ -313,7 +369,7 @@ def build_filter_prompt(articles: list[dict]) -> str:
 
 def build_analyst_prompt(articles: list[dict]) -> str:
     now = datetime.now(timezone.utc)
-    date = f"{now.strftime('%A, %B')} {now.day}, {now.year}"
+    date = _thai_date(now)
     return ANALYST_AGENT_PROMPT_TEMPLATE.format(
         date=date,
         n=len(articles),
@@ -360,10 +416,10 @@ Rules:
 • No disclaimers or suggestions to consult a financial advisor.
 • Include ticker symbols in parentheses, e.g. Apple (AAPL).
 • Quantify where possible: percentages, basis points, dollar amounts.
-""".strip()
+""".strip() + _THAI_DIRECTIVE
 
 ASK_PROMPT_TEMPLATE = """
-Today is {date} (ICT, UTC+7).
+Today is {date} (เวลาประเทศไทย, UTC+7).
 
 The investor's question: {question}
 
@@ -380,6 +436,6 @@ Answer the question directly and concisely.
 
 def build_ask_prompt(question: str, articles: list[dict]) -> str:
     now = datetime.now(timezone.utc)
-    date = f"{now.strftime('%A, %B')} {now.day}, {now.year}"
+    date = _thai_date(now)
     articles_block = _format_articles(articles) if articles else "No articles available."
     return ASK_PROMPT_TEMPLATE.format(date=date, question=question, articles=articles_block)
