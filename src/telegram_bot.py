@@ -9,6 +9,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+from src import strings_th as S
 from src.config import (
     ADMIN_CHAT_ID,
     DIGEST_SCHEDULE_TIME,
@@ -90,40 +91,12 @@ async def send_alert(text: str) -> None:
 # Command handlers
 # ---------------------------------------------------------------------------
 
-_HELP_TEXT = (
-    "<b>📊 Market Reports</b>\n"
-    "/summary — Full market digest (all watchlist)\n"
-    "/summary &lt;ticker|category&gt; — Filtered digest\n"
-    "  e.g. <code>/summary NVDA</code> or <code>/summary ai_tech</code>\n"
-    "/run — Full scheduled digest (3-agent chain)\n"
-    "/breaking — Breaking news (last 2h)\n"
-    "/breaking &lt;hours&gt; — e.g. <code>/breaking 6</code>\n"
-    "/ask &lt;question&gt; — Finance Q&amp;A grounded in today's news\n"
-    "\n"
-    "<b>📋 Watchlist</b>\n"
-    "/watchlist — View all categories and tickers\n"
-    "/add &lt;category&gt; &lt;ticker&gt; — e.g. <code>/add ai_tech MSFT</code>\n"
-    "/remove &lt;ticker&gt; — e.g. <code>/remove MSFT</code>\n"
-    "\n"
-    "<b>ℹ️ System</b>\n"
-    "/history — Last 3 digests\n"
-    "/history &lt;N&gt; — Last N digests, e.g. <code>/history 5</code>\n"
-    "/status — Last pipeline run\n"
-    "/status &lt;N&gt; — Last N runs, e.g. <code>/status 5</code>\n"
-    f"/health — System metrics + next scheduled digest\n"
-    "/help — Show this message\n"
-    "\n"
-    f"<i>📅 Daily digest runs at {DIGEST_SCHEDULE_TIME} {DIGEST_TIMEZONE}</i>"
-)
+# Kept as a module-level name for backward compatibility (e.g. scripts/test_modes.py).
+_HELP_TEXT = S.HELP_TEXT
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_html(
-        "Welcome to <b>StockDigest Bot</b> 📈\n\n"
-        "I deliver US financial market briefings powered by Gemini AI.\n"
-        "Scheduled digests run automatically; use commands for on-demand reports.\n\n"
-        + _HELP_TEXT
-    )
+    await update.message.reply_html(S.WELCOME + _HELP_TEXT)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -133,13 +106,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually trigger a full 3-agent scheduled digest."""
     from src.pipeline import run as pipeline_run
-    await update.message.reply_text("Running full scheduled digest (3-agent chain), please wait…")
+    await update.message.reply_text(S.RUN_WAIT)
     try:
         summary = await pipeline_run(mode="scheduled")
         await update.message.reply_html(summary)
     except Exception as exc:
         logger.error("cmd_run error: %s", exc)
-        await update.message.reply_text(f"Error: {exc}")
+        await update.message.reply_text(S.error(exc))
 
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -147,27 +120,24 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     target = context.args[0].lower() if context.args else None
 
     if target:
-        await update.message.reply_text(f"Generating digest for '{target.upper()}', please wait…")
+        await update.message.reply_text(S.summary_wait_target(target))
     else:
-        await update.message.reply_text("Generating market digest, please wait…")
+        await update.message.reply_text(S.SUMMARY_WAIT)
 
     try:
         summary = await pipeline_run(mode="ondemand", target=target)
         await update.message.reply_html(summary)
     except Exception as exc:
-        await update.message.reply_text(f"Error: {exc}")
+        await update.message.reply_text(S.error(exc))
 
 
 async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     question = " ".join(context.args).strip() if context.args else ""
     if not question:
-        await update.message.reply_text(
-            "Usage: /ask <your question>\n"
-            "Example: /ask why did treasury yields jump today?"
-        )
+        await update.message.reply_text(S.ASK_USAGE)
         return
 
-    await update.message.reply_text("Researching…")
+    await update.message.reply_text(S.ASK_WORKING)
 
     try:
         from src.feeds import fetch_articles
@@ -182,7 +152,7 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_html(answer)
     except Exception as exc:
         logger.error("cmd_ask error: %s", exc)
-        await update.message.reply_text(f"Error: {exc}")
+        await update.message.reply_text(S.error(exc))
 
 
 async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -193,13 +163,13 @@ async def cmd_breaking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         requested = int(context.args[0])
         hours = min(max(requested, 1), 24)
         if hours != requested:
-            await update.message.reply_text(f"Hours clamped to {hours} (valid range: 1–24).")
-    await update.message.reply_text(f"Fetching last {hours}h of news…")
+            await update.message.reply_text(S.breaking_clamp(hours))
+    await update.message.reply_text(S.breaking_fetch(hours))
     try:
         summary = await pipeline_run(mode="breaking", hours_back=hours)
         await update.message.reply_html(summary)
     except Exception as exc:
-        await update.message.reply_text(f"Error: {exc}")
+        await update.message.reply_text(S.error(exc))
 
 
 async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -207,7 +177,7 @@ async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     db.init_db()
     watchlist = db.get_watchlist()
     if not watchlist:
-        await update.message.reply_text("Watchlist is empty.\nUse /add <category> <ticker> to add tickers.")
+        await update.message.reply_text(S.WATCHLIST_EMPTY)
         return
 
     filter_cat = context.args[0].lower() if context.args else None
@@ -221,21 +191,18 @@ async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not lines:
         cats = ", ".join(f"<code>{c}</code>" for c in sorted(watchlist.keys()))
-        await update.message.reply_html(
-            f"No category named '<code>{filter_cat}</code>'.\n"
-            f"Available: {cats}"
-        )
+        await update.message.reply_html(S.watchlist_no_category(filter_cat, cats))
         return
 
     cats_hint = ", ".join(f"<code>{c}</code>" for c in sorted(watchlist.keys()))
-    lines.append(f"\n<i>Use /summary &lt;category&gt; or /summary &lt;TICKER&gt;</i>")
-    lines.append(f"<i>Categories: {cats_hint}</i>")
+    lines.append(S.WATCHLIST_FOOTER_HINT)
+    lines.append(S.watchlist_categories(cats_hint))
     await update.message.reply_html("\n".join(lines))
 
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 2:
-        await update.message.reply_text("Usage: /add <category> <ticker>\nExample: /add ai_tech MSFT")
+        await update.message.reply_text(S.ADD_USAGE)
         return
 
     cat, ticker = context.args[0].lower(), context.args[1].upper()
@@ -243,12 +210,12 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db.init_db()
     db.add_to_watchlist(cat, ticker)
     label = cat.replace("_", " ").title()
-    await update.message.reply_html(f"✅ <b>{ticker}</b> added to <b>{label}</b>.")
+    await update.message.reply_html(S.add_success(ticker, label))
 
 
 async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 1:
-        await update.message.reply_text("Usage: /remove <ticker>\nExample: /remove NVDA")
+        await update.message.reply_text(S.REMOVE_USAGE)
         return
 
     ticker = context.args[0].upper()
@@ -256,9 +223,9 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     db.init_db()
     removed = db.remove_from_watchlist(ticker)
     if removed:
-        await update.message.reply_text(f"Removed {ticker} from watchlist.")
+        await update.message.reply_text(S.remove_success(ticker))
     else:
-        await update.message.reply_text(f"{ticker} not found in watchlist.")
+        await update.message.reply_text(S.remove_not_found(ticker))
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -270,15 +237,12 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     entries = db.get_recent_digests(limit=n)
     if not entries:
-        await update.message.reply_text(
-            "No digest history yet.\nRun /run to generate the first scheduled digest."
-        )
+        await update.message.reply_text(S.HISTORY_EMPTY)
         return
 
     for entry in reversed(entries):  # oldest first
         ts = entry["ran_at"][:16].replace("T", " ") + " UTC"
-        header = f"<b>📅 {ts}</b>\n\n"
-        await update.message.reply_html(header + entry["digest_text"][:3800])
+        await update.message.reply_html(S.history_header(ts) + entry["digest_text"][:3800])
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -290,17 +254,16 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     runs = db.get_recent_runs(limit=n)
     if not runs:
-        await update.message.reply_text("No runs recorded yet.")
+        await update.message.reply_text(S.STATUS_NO_RUNS)
         return
 
-    header = f"Last {n} pipeline run(s):\n" if n > 1 else ""
-    lines = [header.rstrip()]
+    lines = [S.status_header(n).rstrip()]
     for i, run in enumerate(runs, 1):
         status = "✓" if run["success"] else "✗"
         ts = run["ran_at"][:19].replace("T", " ")
-        line = f"{i}. {ts} UTC — {status} {run['articles_fetched']} fetched / {run['articles_sent']} sent"
+        line = S.status_run_line(i, ts, status, run["articles_fetched"], run["articles_sent"])
         if run.get("error_message"):
-            line += f"\n   ⚠ {run['error_message'][:120]}"
+            line += S.status_error_line(run["error_message"])
         lines.append(line)
     await update.message.reply_text("\n".join(lines).strip())
 
@@ -310,19 +273,19 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from src import db
     db.init_db()
     last = db.get_last_run()
-    last_run = last["ran_at"][:19].replace("T", " ") + " UTC" if last else "never"
+    last_run = last["ran_at"][:19].replace("T", " ") + " UTC" if last else S.HEALTH_NEVER
 
     next_t = _next_digest_time()
     next_run = next_t.strftime("%Y-%m-%d %H:%M") + f" {DIGEST_TIMEZONE}"
 
-    lines = [
-        f"CPU temp: {_read_cpu_temp()}",
-        f"Free RAM: {_read_free_ram()}",
-        f"Uptime:   {_read_uptime()}",
-        f"Platform: {platform.system()} {platform.machine()}",
-        f"Last run: {last_run}",
-        f"Next run: {next_run}",
-    ]
+    lines = S.health_lines(
+        cpu=_read_cpu_temp(),
+        ram=_read_free_ram(),
+        uptime=_read_uptime(),
+        platform=f"{platform.system()} {platform.machine()}",
+        last_run=last_run,
+        next_run=next_run,
+    )
     await update.message.reply_text("\n".join(lines))
 
 
@@ -331,7 +294,7 @@ def _read_cpu_temp() -> str:
         with open("/sys/class/thermal/thermal_zone0/temp") as f:
             return f"{int(f.read().strip()) / 1000:.1f}°C"
     except OSError:
-        return "n/a (not on Pi)"
+        return S.HEALTH_NA
 
 
 def _read_free_ram() -> str:
@@ -342,7 +305,7 @@ def _read_free_ram() -> str:
                     return f"{int(line.split()[1]) // 1024} MB free"
     except OSError:
         pass
-    return "n/a (not on Pi)"
+    return S.HEALTH_NA
 
 
 def _read_uptime() -> str:
@@ -353,7 +316,7 @@ def _read_uptime() -> str:
         h, rem = divmod(rem, 3600)
         return f"{d}d {h}h {rem // 60}m"
     except OSError:
-        return "n/a (not on Pi)"
+        return S.HEALTH_NA
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +344,7 @@ async def _run_scheduled_digest() -> None:
         logger.info("Scheduler: digest delivered")
     except Exception as exc:
         logger.error("Scheduler: digest failed: %s", exc)
-        await send_alert(f"⚠️ Daily digest failed: {exc}")
+        await send_alert(S.scheduler_alert(exc))
 
 
 async def _scheduler_loop() -> None:
@@ -422,19 +385,9 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("health", cmd_health))
 
     async with app:
-        await app.bot.set_my_commands([
-            BotCommand("summary", "On-demand digest [category|ticker]"),
-            BotCommand("run", "Full scheduled digest (3-agent chain)"),
-            BotCommand("breaking", "Breaking news [hours, default 2]"),
-            BotCommand("ask", "Finance Q&A grounded in today's news"),
-            BotCommand("watchlist", "View watchlist by category"),
-            BotCommand("add", "Add ticker: /add <category> <ticker>"),
-            BotCommand("remove", "Remove ticker: /remove <ticker>"),
-            BotCommand("history", "Recent digests [N, default 3]"),
-            BotCommand("status", "Pipeline run history [N, default 1]"),
-            BotCommand("health", "System metrics"),
-            BotCommand("help", "Show all commands"),
-        ])
+        await app.bot.set_my_commands(
+            [BotCommand(name, desc) for name, desc in S.BOT_COMMANDS]
+        )
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
         scheduler = asyncio.create_task(_scheduler_loop())
@@ -459,7 +412,7 @@ if __name__ == "__main__":
 
     async def _smoke_test() -> None:
         print("Sending smoke-test message to all configured chat IDs...")
-        await send_message(escape_md("Bot is alive ✓ — Phase 1.2 smoke test passed."))
+        await send_message(escape_md(S.SMOKE_TEST))
         print("Done. Check your Telegram.")
 
     asyncio.run(_smoke_test())

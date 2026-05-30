@@ -1,7 +1,11 @@
 import json
 import logging
 
-from src.config import AI_RELEVANCE_SCORE_THRESHOLD
+from src.config import (
+    AI_RELEVANCE_SCORE_THRESHOLD,
+    GEMINI_TEMPERATURE_ANALYSIS,
+    GEMINI_TEMPERATURE_FILTER,
+)
 from src.gemini_client import generate
 from src.prompts import (
     ANALYST_AGENT_SYSTEM,
@@ -30,6 +34,7 @@ async def run_filter_agent(articles: list[dict]) -> list[dict]:
         system_prompt=build_filter_system(),
         use_cache=False,
         response_mime_type="application/json",
+        temperature=GEMINI_TEMPERATURE_FILTER,
     )
 
     try:
@@ -56,10 +61,20 @@ async def run_filter_agent(articles: list[dict]) -> list[dict]:
 async def run_analyst_agent(articles: list[dict]) -> str:
     """Generate structured plain-text market analysis from high-impact articles."""
     prompt = build_analyst_prompt(articles)
-    return await generate(prompt, system_prompt=ANALYST_AGENT_SYSTEM, use_cache=False)
+    return await generate(
+        prompt,
+        system_prompt=ANALYST_AGENT_SYSTEM,
+        use_cache=False,
+        temperature=GEMINI_TEMPERATURE_ANALYSIS,
+    )
 
 
 async def run_editor_agent(analysis: str, history: list[dict] | None = None) -> str:
     """Polish raw analysis into final Telegram HTML."""
     prompt = build_editor_prompt(analysis, history=history)
-    return await generate(prompt, system_prompt=build_editor_system(), use_cache=True)
+    return await generate(
+        prompt,
+        system_prompt=build_editor_system(),
+        use_cache=True,
+        temperature=GEMINI_TEMPERATURE_ANALYSIS,
+    )

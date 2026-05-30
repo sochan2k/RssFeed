@@ -37,6 +37,12 @@ GEMINI_MODELS: list[str] = [
     "gemma-4-31b-it",
 ]
 
+# --- Generation tuning ---
+# Low temperature for the JSON-scoring filter agent (determinism);
+# moderate for prose analysis/editing (fluent Thai without drifting off-source).
+GEMINI_TEMPERATURE_FILTER: float = 0.15
+GEMINI_TEMPERATURE_ANALYSIS: float = 0.45
+
 # --- Watchlist & Macro Terms ---
 DEFAULT_WATCHLIST: dict[str, list[str]] = {
     "ai_tech": ["NVDA", "GOOG", "AAPL", "TSLA"],

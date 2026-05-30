@@ -2,6 +2,7 @@ import logging
 
 from src import db
 from src.agents import run_analyst_agent, run_editor_agent, run_filter_agent
+from src.config import GEMINI_TEMPERATURE_ANALYSIS
 from src.feeds import fetch_articles
 from src.filters import filter_articles
 from src.gemini_client import generate
@@ -50,16 +51,16 @@ async def run(
     articles = await fetch_articles(hours_back=hours_back)
 
     if not articles:
-        msg = "No articles fetched — check RSS feeds or network."
+        msg = "ไม่พบข่าวจากฟีด — โปรดตรวจสอบ RSS feeds หรือการเชื่อมต่อเครือข่าย"
         db.log_run(success=False, articles_fetched=0, articles_sent=0, error=msg)
         return msg
 
     filtered = filter_articles(articles, target=target, mark_seen=(mode == "scheduled"))
 
     if not filtered:
-        msg = "No significant market news today — all articles filtered out."
+        msg = "วันนี้ไม่มีข่าวตลาดที่มีนัยสำคัญ — บทความทั้งหมดถูกกรองออก"
         if target:
-            msg = f"No significant news found today for '{target}'."
+            msg = f"วันนี้ไม่พบข่าวที่มีนัยสำคัญสำหรับ '{target}'"
         db.log_run(success=True, articles_fetched=len(articles), articles_sent=0)
         return msg
 
@@ -69,7 +70,12 @@ async def run(
             db.save_digest("scheduled", summary)
         else:
             prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target)
-            summary = await generate(prompt, system_prompt=build_system_prompt(), use_cache=True)
+            summary = await generate(
+                prompt,
+                system_prompt=build_system_prompt(),
+                use_cache=True,
+                temperature=GEMINI_TEMPERATURE_ANALYSIS,
+            )
     except Exception as exc:
         error_msg = f"Gemini error: {exc}"
         logger.error(error_msg)

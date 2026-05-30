@@ -58,14 +58,14 @@ async def run_dedup_check() -> None:
 
     logger.info("Dedup check: running breaking first (mark_seen=False)…")
     breaking = await pipeline_run(mode="breaking", hours_back=4)
-    breaking_empty = "No significant" in breaking or "No articles" in breaking
+    breaking_empty = "ไม่มีข่าว" in breaking or "ไม่พบข่าว" in breaking
     await send_digest(breaking)
 
     await asyncio.sleep(3)
 
     logger.info("Dedup check: running scheduled immediately after…")
     sched = await pipeline_run(mode="scheduled")
-    sched_empty = "No significant" in sched or "No articles" in sched
+    sched_empty = "ไม่มีข่าว" in sched or "ไม่พบข่าว" in sched
     await send_digest(sched)
 
     if breaking_empty and sched_empty:

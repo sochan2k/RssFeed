@@ -56,6 +56,7 @@ async def generate(
     system_prompt: str = "",
     use_cache: bool = True,
     response_mime_type: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """
     Send a prompt to Gemini and return the text response.
@@ -64,6 +65,7 @@ async def generate(
     errors. If system_prompt is provided and use_cache=True, caches it on the
     first call for that prompt to reduce token cost on repeated calls.
     Pass response_mime_type="application/json" to request structured JSON output.
+    Pass temperature to override the model default (composes with the cache path).
     """
     client = _get_client()
     prompt_key = _prompt_key(system_prompt) if system_prompt else ""
@@ -87,6 +89,9 @@ async def generate(
 
             if response_mime_type:
                 config_kwargs["response_mime_type"] = response_mime_type
+
+            if temperature is not None:
+                config_kwargs["temperature"] = temperature
 
             response = await asyncio.to_thread(
                 client.models.generate_content,
