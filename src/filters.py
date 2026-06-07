@@ -5,6 +5,7 @@ from difflib import SequenceMatcher
 from src.config import (
     BLACKLIST_KEYWORDS,
     HEADLINE_SIMILARITY_THRESHOLD,
+    HELD_TICKER_SCORE_BOOST,
     MACRO_TERMS,
 )
 from src import db
@@ -19,11 +20,23 @@ def _ticker_pattern(ticker: str) -> re.Pattern:
     return re.compile(r'\b' + re.escape(ticker.upper()) + r'\b')
 
 
-def _watchlist_score(article: dict, tickers: list[str]) -> int:
-    """Score article relevance using pre-fetched ticker list (no DB call here)."""
+def _watchlist_score(
+    article: dict,
+    tickers: list[str],
+    held_tickers: list[str] | None = None,
+) -> int:
+    """Score article relevance using pre-fetched ticker list (no DB call here).
+
+    Each held ticker that the article mentions adds HELD_TICKER_SCORE_BOOST on
+    top of the base +1, so news about positions the user owns ranks higher.
+    """
     text = f"{article['title']} {article['summary']}".upper()
     score = sum(1 for t in tickers if _ticker_pattern(t).search(text))
     score += sum(1 for p in _MACRO_PATTERNS if p.search(text))
+    if held_tickers:
+        score += sum(
+            HELD_TICKER_SCORE_BOOST for t in held_tickers if _ticker_pattern(t).search(text)
+        )
     return score
 
 
@@ -65,13 +78,23 @@ def filter_articles(
     mark_seen=False skips recording survivors in the seen_articles table,
     so ondemand/breaking runs don't consume articles for the scheduled digest.
     """
-    # Fetch watchlist once for the entire batch
+    # Fetch watchlist + holdings once for the entire batch. Held tickers are
+    # unioned into the scoring set so position news is never silently dropped at
+    # Layer 1, even when the ticker isn't on the watchlist.
     watchlist = db.get_watchlist()
-    all_tickers = [t for group in watchlist.values() for t in group]
+    held_tickers = [h["ticker"] for h in db.get_holdings()]
+    all_tickers = list({t for group in watchlist.values() for t in group} | set(held_tickers))
 
     # Layer 1
     after_l1 = []
-    target_tickers = _resolve_target(target, watchlist) if target else None
+    # Held tickers resolve as their own target so /summary <held-ticker> works
+    # even when the ticker isn't on the watchlist.
+    if target and target.upper() in held_tickers:
+        target_tickers = [target.lower()]
+    elif target:
+        target_tickers = _resolve_target(target, watchlist)
+    else:
+        target_tickers = None
 
     for a in articles:
         if target_tickers:
@@ -81,7 +104,7 @@ def filter_articles(
         else:
             if _is_blacklisted(a):
                 continue
-            if _watchlist_score(a, all_tickers) == 0:
+            if _watchlist_score(a, all_tickers, held_tickers) == 0:
                 continue
         after_l1.append(a)
     logger.info("Layer 1 (heuristics): %d → %d", len(articles), len(after_l1))

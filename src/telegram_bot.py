@@ -228,6 +228,127 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(S.remove_not_found(ticker))
 
 
+async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Record a holding: /buy <ticker> <shares> <avg_cost> [target_price]"""
+    if not (3 <= len(context.args) <= 4):
+        await update.message.reply_html(S.BUY_USAGE)
+        return
+
+    ticker = context.args[0].upper()
+    try:
+        shares = float(context.args[1])
+        avg_cost = float(context.args[2])
+        target = float(context.args[3]) if len(context.args) == 4 else None
+    except ValueError:
+        await update.message.reply_html(S.BUY_USAGE)
+        return
+
+    from src import db
+    db.init_db()
+    h = db.buy_holding(ticker, shares, avg_cost, target)
+    if target is not None:
+        from src.prices import get_quotes
+        base = (await get_quotes([ticker])).get(ticker)
+        db.add_forecast(ticker, target, base_price=base, source="user")
+    await update.message.reply_html(
+        S.buy_success(ticker, h["shares"], h["avg_cost"], h["target_price"], h["expected_return"])
+    )
+
+
+async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current holdings with live price, unrealized P&L, and target distance."""
+    from src import db
+    from src.prices import compute_forecast_status, enrich_holdings
+    db.init_db()
+    holdings = db.get_holdings()
+    if not holdings:
+        await update.message.reply_html(S.PORTFOLIO_EMPTY)
+        return
+
+    enriched = await enrich_holdings(holdings)
+    lines = [S.PORTFOLIO_HEADER]
+    for h in enriched:
+        lines.append(S.portfolio_line(h))
+        fc = db.get_latest_forecast(h["ticker"], source="user")
+        if fc:
+            st = compute_forecast_status(fc, h.get("current_price"))
+            lines.append("   ↳ " + S.forecast_line(st))
+    lines.append("")
+    lines.append(S.portfolio_totals(enriched))
+    await update.message.reply_html("\n".join(lines))
+
+
+async def cmd_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove a holding: /sell <ticker>"""
+    if len(context.args) != 1:
+        await update.message.reply_html(S.SELL_USAGE)
+        return
+
+    ticker = context.args[0].upper()
+    from src import db
+    db.init_db()
+    removed = db.remove_holding(ticker)
+    if removed:
+        await update.message.reply_text(S.sell_success(ticker))
+    else:
+        await update.message.reply_text(S.sell_not_found(ticker))
+
+
+async def cmd_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Track price forecasts vs. today's price.
+
+    /forecast                  → overview: latest forecast per ticker vs today
+    /forecast NVDA             → full target history for NVDA vs today
+    /forecast NVDA 200         → log a new user target of $200 (base = today's price)
+    """
+    from src import db
+    from src.prices import compute_forecast_status, get_quotes, status_for_forecasts
+    db.init_db()
+    args = context.args or []
+
+    # --- set form: /forecast TICKER PRICE ---
+    if len(args) >= 2:
+        ticker = args[0].upper()
+        try:
+            target = float(args[1])
+        except ValueError:
+            await update.message.reply_html(S.FORECAST_USAGE)
+            return
+        base = (await get_quotes([ticker])).get(ticker)
+        inserted = db.add_forecast(ticker, target, base_price=base, source="user")
+        h = db.get_holding(ticker)
+        if h:  # keep the holding's current target in sync
+            db.add_holding(ticker, h["shares"], h["avg_cost"], target, h.get("note"))
+        await update.message.reply_html(S.forecast_set_success(ticker, target, base, inserted))
+        return
+
+    # --- timeline for one ticker: /forecast TICKER ---
+    if len(args) == 1:
+        ticker = args[0].upper()
+        rows = db.get_forecasts(ticker=ticker)
+        if not rows:
+            await update.message.reply_html(S.forecast_empty_ticker(ticker))
+            return
+        statuses = await status_for_forecasts(rows)
+        lines = [S.forecast_ticker_header(ticker)]
+        lines.extend("• " + S.forecast_line(s) for s in statuses)
+        await update.message.reply_html("\n".join(lines))
+        return
+
+    # --- overview: latest forecast per ticker ---
+    rows = db.get_forecasts()
+    if not rows:
+        await update.message.reply_html(S.FORECAST_EMPTY)
+        return
+    latest_by_ticker: dict[str, dict] = {}
+    for r in rows:  # rows are newest-first; first seen per ticker is the latest
+        latest_by_ticker.setdefault(r["ticker"], r)
+    statuses = await status_for_forecasts(list(latest_by_ticker.values()))
+    lines = [S.FORECAST_OVERVIEW_HEADER]
+    lines.extend(f"<b>{s['ticker']}</b> — " + S.forecast_line(s) for s in statuses)
+    await update.message.reply_html("\n".join(lines))
+
+
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src import db
     db.init_db()
@@ -380,6 +501,10 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
+    app.add_handler(CommandHandler("portfolio", cmd_portfolio))
+    app.add_handler(CommandHandler("buy", cmd_buy))
+    app.add_handler(CommandHandler("sell", cmd_sell))
+    app.add_handler(CommandHandler("forecast", cmd_forecast))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))

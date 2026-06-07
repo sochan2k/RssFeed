@@ -1,17 +1,23 @@
 import logging
 
 from src import db
-from src.agents import run_analyst_agent, run_editor_agent, run_filter_agent
+from src.agents import (
+    run_analyst_agent,
+    run_editor_agent,
+    run_filter_agent,
+    run_target_extractor,
+)
 from src.config import GEMINI_TEMPERATURE_ANALYSIS
 from src.feeds import fetch_articles
 from src.filters import filter_articles
 from src.gemini_client import generate
+from src.prices import enrich_holdings, get_quotes, status_for_forecasts
 from src.prompts import build_prompt, build_system_prompt
 
 logger = logging.getLogger(__name__)
 
 
-async def _run_agent_chain(articles: list[dict]) -> str:
+async def _run_agent_chain(articles: list[dict], holdings: list[dict] | None = None) -> str:
     """
     3-agent scheduled digest path:
       Filter Agent  → score & prune to high-impact articles
@@ -23,8 +29,29 @@ async def _run_agent_chain(articles: list[dict]) -> str:
     logger.info("Agent chain: starting filter agent (%d articles)", len(articles))
     high_impact = await run_filter_agent(articles)
 
+    # Extract & log analyst price targets from today's news (scheduled only).
+    try:
+        targets = await run_target_extractor(high_impact)
+        if targets:
+            tq = await get_quotes([t["ticker"] for t in targets])
+            for t in targets:
+                db.add_forecast(
+                    t["ticker"], t["target"],
+                    base_price=tq.get(t["ticker"].upper()),
+                    source="analyst", note=(t.get("firm") or None),
+                )
+    except Exception as exc:  # extraction must never break the digest
+        logger.warning("Target extraction failed: %s", exc)
+
+    # Build forecast context for held tickers: compare past targets to today.
+    held_forecasts = [
+        fc for h in (holdings or [])
+        if (fc := db.get_latest_forecast(h["ticker"]))
+    ]
+    forecasts = await status_for_forecasts(held_forecasts) if held_forecasts else []
+
     logger.info("Agent chain: starting analyst agent (%d articles)", len(high_impact))
-    analysis = await run_analyst_agent(high_impact)
+    analysis = await run_analyst_agent(high_impact, holdings=holdings, forecasts=forecasts)
 
     logger.info("Agent chain: starting editor agent (history=%d)", len(history))
     return await run_editor_agent(analysis, history=history)
@@ -48,6 +75,7 @@ async def run(
     db.init_db()
     db.cleanup_old()
 
+    holdings = await enrich_holdings(db.get_holdings())
     articles = await fetch_articles(hours_back=hours_back)
 
     if not articles:
@@ -66,10 +94,10 @@ async def run(
 
     try:
         if mode == "scheduled":
-            summary = await _run_agent_chain(filtered)
+            summary = await _run_agent_chain(filtered, holdings=holdings)
             db.save_digest("scheduled", summary)
         else:
-            prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target)
+            prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target, holdings=holdings)
             summary = await generate(
                 prompt,
                 system_prompt=build_system_prompt(),

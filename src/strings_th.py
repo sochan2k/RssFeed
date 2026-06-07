@@ -14,7 +14,6 @@ HELP_TEXT = (
     "/summary — สรุปตลาดฉบับเต็ม (ทุก watchlist)\n"
     "/summary &lt;ticker|category&gt; — สรุปแบบกรอง\n"
     "  เช่น <code>/summary NVDA</code> หรือ <code>/summary ai_tech</code>\n"
-    "/run — สรุปตามตารางฉบับเต็ม (3-agent chain)\n"
     "/breaking — ข่าวด่วน (2 ชม. ล่าสุด)\n"
     "/breaking &lt;hours&gt; — เช่น <code>/breaking 6</code>\n"
     "/ask &lt;question&gt; — ถาม-ตอบการเงินจากข่าววันนี้\n"
@@ -24,13 +23,18 @@ HELP_TEXT = (
     "/add &lt;category&gt; &lt;ticker&gt; — เช่น <code>/add ai_tech MSFT</code>\n"
     "/remove &lt;ticker&gt; — เช่น <code>/remove MSFT</code>\n"
     "\n"
+    "<b>💼 พอร์ต</b>\n"
+    "/portfolio — ดูสถานะที่ถือ + ผลตอบแทนคาดหวัง\n"
+    "/buy &lt;ticker&gt; &lt;จำนวน&gt; &lt;ต้นทุน&gt; [เป้าหมาย] — เช่น <code>/buy NVDA 10 120 200</code>\n"
+    "/sell &lt;ticker&gt; — เช่น <code>/sell NVDA</code>\n"
+    "/forecast — เทียบเป้าที่เคยตั้งกับราคาวันนี้\n"
+    "/forecast &lt;ticker&gt; [ราคา] — ดูประวัติ/ตั้งเป้า เช่น <code>/forecast NVDA 200</code>\n"
+    "\n"
     "<b>ℹ️ ระบบ</b>\n"
     "/history — สรุป 3 ฉบับล่าสุด\n"
     "/history &lt;N&gt; — สรุป N ฉบับล่าสุด เช่น <code>/history 5</code>\n"
-    "/status — การรันล่าสุด\n"
-    "/status &lt;N&gt; — การรัน N ครั้งล่าสุด เช่น <code>/status 5</code>\n"
-    "/health — สถานะระบบ + เวลาสรุปรอบถัดไป\n"
     "/help — แสดงข้อความนี้\n"
+    "<i>ขั้นสูง (ยังใช้ได้): /run (สรุป 3-agent ฉบับเต็ม) · /status (ประวัติการรัน) · /health (สถานะระบบ)</i>\n"
     "\n"
     f"<i>📅 สรุปประจำวันเวลา {DIGEST_SCHEDULE_TIME} {DIGEST_TIMEZONE}</i>"
 )
@@ -98,6 +102,157 @@ def remove_not_found(ticker: str) -> str:
     return f"ไม่พบ {ticker} ใน watchlist"
 
 
+# --- Portfolio / holdings (HTML) ---
+BUY_USAGE = (
+    "วิธีใช้: /buy &lt;ticker&gt; &lt;จำนวนหุ้น&gt; &lt;ต้นทุนต่อหุ้น&gt; [ราคาเป้าหมาย]\n"
+    "ตัวอย่าง: <code>/buy NVDA 10 120 200</code>"
+)
+SELL_USAGE = "วิธีใช้: /sell &lt;ticker&gt;\nตัวอย่าง: <code>/sell NVDA</code>"
+PORTFOLIO_EMPTY = "พอร์ตว่างเปล่า\nใช้ /buy &lt;ticker&gt; &lt;จำนวนหุ้น&gt; &lt;ต้นทุน&gt; [เป้าหมาย] เพื่อเพิ่มสถานะ"
+PORTFOLIO_HEADER = "<b>💼 พอร์ตของคุณ</b>"
+
+
+def buy_success(ticker: str, shares: float, cost: float, target: float | None, exp_return: float | None) -> str:
+    msg = f"✅ บันทึก <b>{ticker}</b>: {shares:g} หุ้น @ ${cost:g}"
+    if target is not None:
+        msg += f" → เป้าหมาย ${target:g}"
+        if exp_return is not None:
+            msg += f" (ผลตอบแทนคาดหวัง {exp_return:+.1%})"
+    return msg
+
+
+def portfolio_line(h: dict) -> str:
+    """Render one enriched holding (see prices.compute_pnl) as a portfolio bullet."""
+    line = f"• <b>{h['ticker']}</b>: {h['shares']:g} หุ้น @ ${h['avg_cost']:,.2f}"
+    price = h.get("current_price")
+    if price is not None:
+        line += f" → <b>${price:,.2f}</b>"
+        ur = h.get("unrealized_return")
+        pl = h.get("unrealized_pl")
+        if ur is not None:
+            line += f" | กำไร/ขาดทุน <b>{ur:+.1%}</b>"
+        if pl is not None:
+            line += f" ({pl:+,.0f}$)"
+    target = h.get("target_price")
+    if target is not None:
+        line += f" | เป้า ${target:,.2f}"
+        tt = h.get("to_target")
+        if tt is not None:
+            line += f" (เหลืออีก {tt:+.1%})"
+        elif h.get("expected_return") is not None:
+            line += f" (คาดหวัง {h['expected_return']:+.1%})"
+    else:
+        line += " | <i>ยังไม่ตั้งเป้า</i>"
+    w = h.get("weight")
+    if w is not None:
+        line += f" | น้ำหนัก {w:.0%}"
+    if price is None:
+        line += " <i>(ไม่มีราคาล่าสุด)</i>"
+    return line
+
+
+def portfolio_totals(holdings: list[dict]) -> str:
+    """Render the portfolio total / P&L footer from enriched holdings."""
+    cost_all = sum(h["cost_basis"] for h in holdings)
+    priced = [h for h in holdings if h.get("market_value") is not None]
+    if not priced:
+        return f"<b>รวมต้นทุน:</b> ${cost_all:,.0f} <i>(ไม่มีราคาล่าสุด)</i>"
+    mv = sum(h["market_value"] for h in priced)
+    cost_priced = sum(h["cost_basis"] for h in priced)
+    pl = mv - cost_priced
+    pct = pl / cost_priced if cost_priced else 0
+    line = f"<b>รวม:</b> มูลค่า ${mv:,.0f} | ต้นทุน ${cost_priced:,.0f} | P/L <b>{pl:+,.0f}$</b> ({pct:+.1%})"
+    if len(priced) < len(holdings):
+        line += f" <i>(จาก {len(priced)}/{len(holdings)} สถานะที่มีราคา)</i>"
+    return line
+
+
+def sell_success(ticker: str) -> str:
+    return f"ลบ {ticker} ออกจากพอร์ตแล้ว"
+
+
+def sell_not_found(ticker: str) -> str:
+    return f"ไม่พบ {ticker} ในพอร์ต"
+
+
+# --- Forecast tracking (HTML) ---
+FORECAST_USAGE = (
+    "วิธีใช้:\n"
+    "/forecast — ดูการคาดการณ์ทั้งหมดเทียบราคาวันนี้\n"
+    "/forecast &lt;ticker&gt; — ดูประวัติเป้าของตัวนั้น\n"
+    "/forecast &lt;ticker&gt; &lt;ราคา&gt; — ตั้งเป้าใหม่ เช่น <code>/forecast NVDA 200</code>"
+)
+FORECAST_EMPTY = (
+    "ยังไม่มีการคาดการณ์ที่บันทึกไว้\n"
+    "ตั้งเป้าด้วย /forecast &lt;ticker&gt; &lt;ราคา&gt; เช่น <code>/forecast NVDA 200</code>"
+)
+FORECAST_OVERVIEW_HEADER = "<b>🎯 การคาดการณ์ที่ติดตามอยู่</b>"
+
+
+def forecast_ticker_header(ticker: str) -> str:
+    return f"<b>🎯 ประวัติเป้าราคา {ticker}</b>"
+
+
+def forecast_empty_ticker(ticker: str) -> str:
+    return f"ไม่มีเป้าราคาที่บันทึกไว้สำหรับ {ticker}"
+
+
+def forecast_set_success(ticker: str, target: float, base: float | None, inserted: bool) -> str:
+    if not inserted:
+        return f"เป้า {ticker} ที่ ${target:g} มีบันทึกอยู่แล้ว (ไม่บันทึกซ้ำ)"
+    msg = f"✅ บันทึกเป้า <b>{ticker}</b> ที่ <b>${target:g}</b>"
+    if base is not None:
+        gap = (target - base) / base if base else None
+        msg += f" (ราคาฐานวันนี้ ${base:,.2f}"
+        if gap is not None:
+            msg += f", upside {gap:+.1%}"
+        msg += ")"
+    else:
+        msg += " <i>(ไม่มีราคาฐาน — ดึงราคาไม่ได้)</i>"
+    return msg
+
+
+def _forecast_status_phrase(s: dict) -> str:
+    if s.get("current_price") is None:
+        return "<i>ไม่มีราคาล่าสุด</i>"
+    if s.get("reached"):
+        return "ถึงเป้าแล้ว ✓"
+    prog = s.get("progress")
+    gap = s.get("gap_to_target")
+    if prog is not None and prog >= 0.9:
+        return f"ใกล้เป้า (เหลือ {gap:+.1%})" if gap is not None else "ใกล้เป้า"
+    if gap is not None:
+        return f"เหลืออีก {gap:+.1%}"
+    return ""
+
+
+def forecast_line(s: dict) -> str:
+    """Render one forecast-status row (see prices.compute_forecast_status).
+
+    No leading bullet — callers add structure (timeline vs overview).
+    """
+    src = "เป้าผม" if s["source"] == "user" else "นักวิเคราะห์"
+    if s["source"] == "analyst" and s.get("note"):
+        src += f" {s['note']}"
+    line = f"${s['target_price']:g} <i>({src})</i>"
+    age = s.get("age_days")
+    if age is not None:
+        line += f" ตั้งเมื่อ {age} วันก่อน"
+    base = s.get("base_price")
+    if base is not None:
+        line += f" @ ${base:,.2f}"
+    cur = s.get("current_price")
+    if cur is not None:
+        line += f" → วันนี้ ${cur:,.2f}"
+        prog = s.get("progress")
+        if prog is not None:
+            line += f" | วิ่งไป {prog:.0%}"
+    phrase = _forecast_status_phrase(s)
+    if phrase:
+        line += f" | {phrase}"
+    return line
+
+
 # --- History / status ---
 HISTORY_EMPTY = "ยังไม่มีประวัติสรุป\nใช้ /run เพื่อสร้างสรุปตามตารางฉบับแรก"
 STATUS_NO_RUNS = "ยังไม่มีการรันที่บันทึกไว้"
@@ -145,17 +300,21 @@ def scheduler_alert(exc: object) -> str:
 
 
 # --- BotFather command menu descriptions ---
+# Note: /run, /status, /health are intentionally omitted from this menu to keep
+# the / autocomplete list focused. Their handlers stay registered in
+# telegram_bot.py, so power users can still type them (listed under "ขั้นสูง" in /help).
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("summary", "สรุปตลาดแบบทันที [category|ticker]"),
-    ("run", "สรุปตามตารางฉบับเต็ม (3-agent chain)"),
     ("breaking", "ข่าวด่วน [ชั่วโมง, ค่าเริ่มต้น 2]"),
     ("ask", "ถาม-ตอบการเงินจากข่าววันนี้"),
     ("watchlist", "ดู watchlist ตามหมวด"),
     ("add", "เพิ่ม ticker: /add <category> <ticker>"),
     ("remove", "ลบ ticker: /remove <ticker>"),
+    ("portfolio", "ดูพอร์ต + ผลตอบแทนคาดหวัง"),
+    ("buy", "เพิ่มสถานะ: /buy <ticker> <จำนวน> <ต้นทุน> [เป้าหมาย]"),
+    ("sell", "ลบสถานะ: /sell <ticker>"),
+    ("forecast", "เทียบเป้าที่ตั้งไว้กับราคาวันนี้ [ticker] [ราคา]"),
     ("history", "สรุปล่าสุด [N, ค่าเริ่มต้น 3]"),
-    ("status", "ประวัติการรัน [N, ค่าเริ่มต้น 1]"),
-    ("health", "สถานะระบบ"),
     ("help", "แสดงคำสั่งทั้งหมด"),
 ]
 

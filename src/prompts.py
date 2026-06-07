@@ -27,6 +27,95 @@ def _flat_tickers(watchlist: dict[str, list[str]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Portfolio (holdings) helpers — injected on the USER side to keep the
+# system-prompt context cache stable across portfolio edits.
+# ---------------------------------------------------------------------------
+
+_PORTFOLIO_BLOCK_TEMPLATE = """
+
+--- YOUR PORTFOLIO ---
+{holdings}
+--- END PORTFOLIO ---"""
+
+
+def _format_holdings(holdings: list[dict]) -> str:
+    """Render holdings as one bullet per position for injection into user prompts.
+
+    Includes live price / unrealized P&L / distance-to-target when the holding
+    has been enriched (see prices.compute_pnl); falls back to cost + expected
+    return otherwise.
+    """
+    lines = []
+    for h in holdings:
+        line = f"• {h['ticker']}: {h['shares']:g} shares @ ${h['avg_cost']:g}"
+        price = h.get("current_price")
+        if price is not None:
+            line += f", now ${price:g}"
+            ur = h.get("unrealized_return")
+            if ur is not None:
+                line += f" ({ur:+.1%} unrealized)"
+        if h.get("target_price") is not None:
+            line += f" → target ${h['target_price']:g}"
+            tt = h.get("to_target")
+            if tt is not None:
+                line += f" ({tt:+.1%} to target)"
+            elif h.get("expected_return") is not None:
+                line += f" (expected return {h['expected_return']:+.1%})"
+        if h.get("note"):
+            line += f" — {h['note']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _portfolio_block(holdings: list[dict] | None) -> str:
+    """Return the labeled portfolio section, or empty string when no holdings."""
+    if not holdings:
+        return ""
+    return _PORTFOLIO_BLOCK_TEMPLATE.format(holdings=_format_holdings(holdings))
+
+
+_FORECAST_BLOCK_TEMPLATE = """
+
+--- FORECAST TRACKING ---
+{forecasts}
+--- END FORECAST TRACKING ---"""
+
+
+def _format_forecasts(forecasts: list[dict]) -> str:
+    """Render forecast-status rows (see prices.compute_forecast_status) for prompts."""
+    lines = []
+    for s in forecasts:
+        src = "your target" if s["source"] == "user" else "analyst"
+        if s["source"] == "analyst" and s.get("note"):
+            src += f" {s['note']}"
+        line = f"• {s['ticker']}: target ${s['target_price']:g} ({src})"
+        age = s.get("age_days")
+        if age is not None:
+            line += f", set {age}d ago"
+        base = s.get("base_price")
+        if base is not None:
+            line += f" @ ${base:g}"
+        cur = s.get("current_price")
+        if cur is not None:
+            line += f", now ${cur:g}"
+            prog = s.get("progress")
+            if prog is not None:
+                line += f" ({prog:.0%} of the way)"
+            gap = s.get("gap_to_target")
+            if gap is not None:
+                line += f", {gap:+.1%} to target"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _forecast_block(forecasts: list[dict] | None) -> str:
+    """Return the labeled forecast-tracking section, or empty string when none."""
+    if not forecasts:
+        return ""
+    return _FORECAST_BLOCK_TEMPLATE.format(forecasts=_format_forecasts(forecasts))
+
+
+# ---------------------------------------------------------------------------
 # Thai localization helpers
 # ---------------------------------------------------------------------------
 
@@ -87,6 +176,22 @@ CONTENT RULES:
    basis points. State the surprise vs. consensus (beat/miss magnitude) when known.
 6. Add ⭐ immediately after the ticker symbol for any watchlist ticker, e.g. NVDA ⭐.
 7. If no genuinely market-moving news exists, say so clearly in one sentence.
+8. EXPECTATIONS / "PRICED IN": Prices already reflect the market's expectations.
+   When an article states the consensus or estimate, classify the news as a
+   genuine surprise (beat/miss — likely to move price) or as already expected
+   (priced in — limited further move) and say which. If the article does NOT
+   provide the consensus figure, do NOT guess what was expected and do NOT
+   assert it is priced in — report the fact neutrally.
+9. PORTFOLIO: If a "YOUR PORTFOLIO" section is provided, add a section headed
+   <b>💼 พอร์ตของคุณ</b>. For each holding mentioned in the news, state whether the
+   development supports or threatens the position relative to its target price,
+   and restate the holding's expected return. Omit this section entirely if no
+   portfolio is provided or none of the holdings appear in today's news.
+10. FORECAST TRACKING: If a "FORECAST TRACKING" section is provided and today's
+   news relates to a tracked ticker, note how close the price is to the forecast
+   using ONLY the supplied figures (e.g. "ราคาวิ่งไปแล้ว 94% ของเป้า $200 ที่ตั้งไว้").
+   Do NOT invent or adjust targets. "Near target" is a distance fact, not proof a
+   move is priced in — only call something priced in under the rule-8 condition.
 
 PRIORITY: When space is tight, weight items in this order — monetary policy
 (Fed/FOMC) > broad macro data (CPI, jobs, GDP) > sector/regulatory shifts >
@@ -174,21 +279,24 @@ def build_prompt(
     mode: str = "scheduled",
     hours_back: int | None = None,
     target: str | None = None,
+    holdings: list[dict] | None = None,
+    forecasts: list[dict] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     date = _thai_date(now)
     articles_block = _format_articles(articles)
+    extras = _portfolio_block(holdings) + _forecast_block(forecasts)
 
     if mode == "breaking":
         return BREAKING_PROMPT_TEMPLATE.format(
             date=date,
             hours=hours_back or 2,
             articles=articles_block,
-        )
+        ) + extras
     if mode == "ondemand":
         target_text = f"specifically for '{target.upper()}'" if target else "for all watchlist sectors"
-        return ONDEMAND_PROMPT_TEMPLATE.format(date=date, target_text=target_text, articles=articles_block)
-    return SCHEDULED_PROMPT_TEMPLATE.format(date=date, articles=articles_block)
+        return ONDEMAND_PROMPT_TEMPLATE.format(date=date, target_text=target_text, articles=articles_block) + extras
+    return SCHEDULED_PROMPT_TEMPLATE.format(date=date, articles=articles_block) + extras
 
 
 def _format_articles(articles: list[dict]) -> str:
@@ -249,6 +357,38 @@ def build_filter_system(watchlist: dict[str, list[str]] | None = None) -> str:
     return _FILTER_AGENT_SYSTEM_TEMPLATE.format(watchlist_tickers=_flat_tickers(watchlist))
 
 
+TARGET_EXTRACTOR_SYSTEM = """
+You extract analyst price targets from US financial news for a stock tracker.
+
+Output ONLY cases where an article EXPLICITLY states a numeric analyst/firm price
+target for a specific stock (e.g. "Morgan Stanley raised its price target to
+$200", "RBC set a $180 PT"). Be strict:
+- Extract only an explicit number stated in the text. NEVER infer, estimate, or
+  invent a figure. If an article has no explicit price target, output nothing for it.
+- Vague phrases ("could double", "sees upside", "bullish") are NOT targets — skip.
+- Use the official US ticker symbol. If the ticker is unclear, skip the item.
+- Capture the issuing firm when stated (for traceability).
+
+Return ONLY a JSON array, one object per target found (empty array [] if none):
+[{"ticker": "NVDA", "target": 200, "firm": "Morgan Stanley"}]
+Each object: "ticker" (string), "target" (number), "firm" (string, "" if unknown).
+""".strip()
+
+TARGET_EXTRACTOR_PROMPT_TEMPLATE = """
+Extract explicit analyst price targets from these {n} articles.
+Return a JSON array (empty [] if none are explicitly stated).
+
+--- ARTICLES ---
+{articles}
+""".strip()
+
+
+def build_target_extractor_prompt(articles: list[dict]) -> str:
+    return TARGET_EXTRACTOR_PROMPT_TEMPLATE.format(
+        n=len(articles), articles=_format_articles(articles)
+    )
+
+
 ANALYST_AGENT_SYSTEM = """
 You are a senior equity analyst producing a structured market briefing for a
 sophisticated self-directed investor. Your output goes to a Telegram editor —
@@ -281,6 +421,21 @@ QUALITY BAR:
   growth fears).
 - Distinguish a structural catalyst from one-day noise; say which.
 - Neutral tone: report facts, no cheerleading. Separate confirmed from speculative.
+- PRICED IN: Prices already embed expectations. When an article gives the
+  consensus/estimate, label the news a genuine surprise (beat/miss) or already
+  expected (priced in) and say which. If no consensus figure is given, do NOT
+  invent what was expected — state the fact neutrally.
+
+PORTFOLIO IMPACT:
+- If a "YOUR PORTFOLIO" section is supplied with the articles, add a section
+  labeled "PORTFOLIO IMPACT:" listing each held ticker that appears in today's
+  news. For each, say whether the development supports or threatens the position
+  relative to its target price, and restate its expected return. Omit the
+  section entirely when no portfolio is given or no holding appears in the news.
+- If a "FORECAST TRACKING" section is supplied and today's news relates to a
+  tracked ticker, add the supplied distance figure (e.g. "price is 94% of the
+  way to the $200 target set 90d ago"). Use only the given numbers; never invent
+  a target, and do not equate "near target" with "priced in".
 
 Be concise and data-driven. Include ticker symbols. No disclaimers.
 """.strip() + _THAI_DIRECTIVE
@@ -311,6 +466,11 @@ Required structure — use exactly these Thai section headers:
 
 <b>⚠️ จับตาวันพรุ่งนี้</b>
 [one sentence]
+
+If — and only if — the analysis contains a "PORTFOLIO IMPACT:" section, render
+it last under this exact header (otherwise omit it entirely):
+<b>💼 พอร์ตของคุณ</b>
+• TICKER ⭐: supports/threatens the position vs. target — expected return +X%
 
 PRESENTATION:
 • Lead with the single biggest market mover.
@@ -367,14 +527,18 @@ def build_filter_prompt(articles: list[dict]) -> str:
     )
 
 
-def build_analyst_prompt(articles: list[dict]) -> str:
+def build_analyst_prompt(
+    articles: list[dict],
+    holdings: list[dict] | None = None,
+    forecasts: list[dict] | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
     date = _thai_date(now)
     return ANALYST_AGENT_PROMPT_TEMPLATE.format(
         date=date,
         n=len(articles),
         articles=_format_articles(articles),
-    )
+    ) + _portfolio_block(holdings) + _forecast_block(forecasts)
 
 
 def _format_history(history: list[dict]) -> str:

@@ -51,6 +51,18 @@ class TestWatchlistScore:
         score = _watchlist_score(_article("NVDA MSFT earnings beat; Fed holds rate"), _TICKERS)
         assert score >= 3
 
+    def test_held_ticker_gets_bonus(self):
+        """A held ticker should outscore the same article scored without holdings."""
+        art = _article("NVDA surges on guidance")
+        base = _watchlist_score(art, _TICKERS)
+        boosted = _watchlist_score(art, _TICKERS, held_tickers=["NVDA"])
+        assert boosted > base
+
+    def test_held_ticker_not_in_watchlist_scores(self):
+        """A held ticker absent from the watchlist still scores > 0 via the bonus."""
+        art = _article("PLTR wins major government contract")
+        assert _watchlist_score(art, _TICKERS, held_tickers=["PLTR"]) > 0
+
 
 # ---------------------------------------------------------------------------
 # _similar
@@ -80,11 +92,11 @@ class TestSimilar:
 class TestFilterArticles:
     @pytest.fixture(autouse=True)
     def _patch_watchlist(self):
-        """Pin the watchlist so tests don't depend on live DB state (mutable via /add)."""
+        """Pin watchlist + holdings so tests don't depend on live DB state."""
         with patch(
             "src.filters.db.get_watchlist",
             return_value={"ai_tech": ["NVDA", "AAPL", "MSFT"]},
-        ):
+        ), patch("src.filters.db.get_holdings", return_value=[]):
             yield
 
     def _make_articles(self, specs: list[tuple]) -> list[dict]:
@@ -135,3 +147,15 @@ class TestFilterArticles:
              patch("src.filters.db.mark_seen") as mock_mark:
             filter_articles(articles)
         mock_mark.assert_called_once_with("https://a.com/1")
+
+    def test_held_ticker_not_in_watchlist_survives_layer1(self):
+        """News about a holding absent from the watchlist must not be dropped."""
+        articles = [_article("PLTR jumps on new defense contract", link="https://a.com/1")]
+        with patch("src.filters.db.get_holdings",
+                   return_value=[{"ticker": "PLTR", "shares": 5, "avg_cost": 20,
+                                  "target_price": None, "expected_return": None}]), \
+             patch("src.filters.db.is_seen", return_value=False), \
+             patch("src.filters.db.mark_seen"):
+            result = filter_articles(articles)
+        assert len(result) == 1
+        assert "PLTR" in result[0]["title"]

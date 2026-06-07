@@ -37,6 +37,25 @@ def init_db() -> None:
                 digest_text       TEXT NOT NULL,
                 tickers_mentioned TEXT
             );
+            CREATE TABLE IF NOT EXISTS holdings (
+                ticker        TEXT PRIMARY KEY,
+                shares        REAL NOT NULL,
+                avg_cost      REAL NOT NULL,
+                target_price  REAL,
+                note          TEXT,
+                updated_at    TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS forecast_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker        TEXT NOT NULL,
+                target_price  REAL NOT NULL,
+                base_price    REAL,
+                source        TEXT NOT NULL,
+                note          TEXT,
+                created_at    TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_ticker
+                ON forecast_history(ticker, created_at);
         """)
         
         # Seed watchlist if empty
@@ -87,6 +106,163 @@ def remove_from_watchlist(ticker: str) -> bool:
     with _conn() as conn:
         cur = conn.execute("DELETE FROM watchlist WHERE ticker = ?", (ticker.upper(),))
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Holdings (user portfolio)
+# ---------------------------------------------------------------------------
+
+def add_holding(
+    ticker: str,
+    shares: float,
+    avg_cost: float,
+    target_price: float | None = None,
+    note: str | None = None,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO holdings
+               (ticker, shares, avg_cost, target_price, note, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ticker.upper(), shares, avg_cost, target_price, note, now),
+        )
+
+
+def get_holding(ticker: str) -> dict | None:
+    """Return a single holding row (no computed fields), or None."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT ticker, shares, avg_cost, target_price, note FROM holdings WHERE ticker = ?",
+            (ticker.upper(),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def buy_holding(
+    ticker: str,
+    shares: float,
+    price: float,
+    target_price: float | None = None,
+) -> dict:
+    """Add to a position, averaging cost across lots (the correct /buy behavior).
+
+    On an existing position: shares are summed and avg_cost becomes the
+    share-weighted average. A target is updated only when a new one is supplied;
+    otherwise the existing target is kept. Returns the resulting holding dict
+    (with computed expected_return).
+    """
+    ticker = ticker.upper()
+    existing = get_holding(ticker)
+    if existing:
+        total_shares = existing["shares"] + shares
+        new_cost = (
+            (existing["shares"] * existing["avg_cost"] + shares * price) / total_shares
+            if total_shares else price
+        )
+        new_target = target_price if target_price is not None else existing["target_price"]
+        add_holding(ticker, total_shares, new_cost, new_target, existing.get("note"))
+    else:
+        add_holding(ticker, shares, price, target_price)
+
+    h = get_holding(ticker)
+    target = h["target_price"]
+    cost = h["avg_cost"]
+    h["expected_return"] = (target - cost) / cost if target is not None and cost else None
+    return h
+
+
+def get_holdings() -> list[dict]:
+    """Return all holdings ordered by ticker, each with a computed expected_return.
+
+    expected_return = (target_price - avg_cost) / avg_cost, or None when no
+    target is set (or avg_cost is 0).
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT ticker, shares, avg_cost, target_price, note FROM holdings ORDER BY ticker"
+        ).fetchall()
+    holdings = []
+    for row in rows:
+        h = dict(row)
+        target = h["target_price"]
+        cost = h["avg_cost"]
+        h["expected_return"] = (target - cost) / cost if target is not None and cost else None
+        holdings.append(h)
+    return holdings
+
+
+def remove_holding(ticker: str) -> bool:
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM holdings WHERE ticker = ?", (ticker.upper(),))
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Forecast history (time-stamped price targets, user + analyst)
+# ---------------------------------------------------------------------------
+
+def add_forecast(
+    ticker: str,
+    target_price: float,
+    base_price: float | None = None,
+    source: str = "user",
+    note: str | None = None,
+    dedup_days: int = 7,
+) -> bool:
+    """Log a price forecast. Returns True if inserted, False if deduped.
+
+    Dedup: an identical (ticker, source, target_price) logged within the last
+    `dedup_days` is skipped, so repeated news coverage doesn't spam the history.
+    A genuinely revised target (different number) always inserts.
+    """
+    ticker = ticker.upper()
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=dedup_days)).isoformat()
+    with _conn() as conn:
+        dup = conn.execute(
+            """SELECT 1 FROM forecast_history
+               WHERE ticker = ? AND source = ? AND target_price = ? AND created_at >= ?
+               LIMIT 1""",
+            (ticker, source, target_price, cutoff),
+        ).fetchone()
+        if dup:
+            return False
+        conn.execute(
+            """INSERT INTO forecast_history
+               (ticker, target_price, base_price, source, note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ticker, target_price, base_price, source, note, now.isoformat()),
+        )
+    return True
+
+
+def get_forecasts(ticker: str | None = None, limit: int | None = None) -> list[dict]:
+    """Return forecasts (newest first), optionally filtered to one ticker."""
+    sql = "SELECT * FROM forecast_history"
+    params: list = []
+    if ticker:
+        sql += " WHERE ticker = ?"
+        params.append(ticker.upper())
+    sql += " ORDER BY created_at DESC, id DESC"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def get_latest_forecast(ticker: str, source: str | None = None) -> dict | None:
+    """Return the most recent forecast for a ticker (optionally by source)."""
+    sql = "SELECT * FROM forecast_history WHERE ticker = ?"
+    params: list = [ticker.upper()]
+    if source:
+        sql += " AND source = ?"
+        params.append(source)
+    sql += " ORDER BY created_at DESC, id DESC LIMIT 1"
+    with _conn() as conn:
+        row = conn.execute(sql, params).fetchone()
+        return dict(row) if row else None
 
 
 def url_hash(url: str) -> str:

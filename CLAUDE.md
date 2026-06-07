@@ -66,7 +66,9 @@ send_digest (src/telegram_bot.py)  — caller's responsibility
 
 **Context caching** (`src/gemini_client.py:generate`): When `use_cache=True`, the system prompt is cached in Gemini's context cache on first call and reused. The cache key is a SHA-256 prefix of the system prompt. The filter agent explicitly sets `use_cache=False` because it expects structured JSON output and the model may differ per call.
 
-**Dedup persistence** (`src/db.py`): Two SQLite tables — `seen_articles` (URL hashes, 90-day retention) and `run_log` (pipeline run history). `db.init_db()` and `db.cleanup_old()` are called at the start of every pipeline run.
+**Dedup persistence** (`src/db.py`): SQLite tables — `seen_articles` (URL hashes, 90-day retention), `run_log`, `watchlist`, `holdings`, and `forecast_history`. `db.init_db()` and `db.cleanup_old()` are called at the start of every pipeline run.
+
+**Portfolio & forecast tracking** (`src/prices.py`, `src/db.py`): `holdings` stores shares/avg_cost/target; `/buy` averages cost across lots (`db.buy_holding`). `prices.enrich_holdings` adds live price, unrealized P&L, weight. `forecast_history` logs time-stamped price targets (user + analyst, deduped 7d); `prices.compute_forecast_status` compares a past target to the current price (gap/progress/reached) — **logging needs no price; comparison does**. Analyst targets are extracted from news by `agents.run_target_extractor` (scheduled only, JSON, strict no-invention guardrail). **Holdings/forecasts are injected into the USER prompt** (not system) to preserve the context cache. A near-target distance is **never** equated with "priced in" — that claim stays gated on consensus stated in the article. No live price → features degrade gracefully (show "ไม่มีราคาล่าสุด").
 
 **Telegram delivery** (`src/telegram_bot.py`): Digests use `ParseMode.HTML`; status/alert messages use `ParseMode.MARKDOWN_V2` (with `escape_md()`). Messages exceeding 4096 characters are split on paragraph boundaries by `_split()`. System metrics (`/health`) read from Linux `/proc` and `/sys` paths — returns `n/a` on non-Linux.
 
@@ -76,8 +78,9 @@ send_digest (src/telegram_bot.py)  — caller's responsibility
 |--------|---------------|
 | `src/config.py` | All tuneable constants: watchlist tickers, RSS URLs, thresholds, model list |
 | `src/feeds.py` | Async RSS fetch with retry (tenacity), HTML stripping, age filtering |
-| `src/filters.py` | 3-layer article filtering (heuristics + dedup) |
-| `src/db.py` | SQLite: seen-article dedup and run logging |
+| `src/filters.py` | 3-layer article filtering (heuristics + dedup); held tickers boost & survive |
+| `src/db.py` | SQLite: dedup, run log, watchlist, holdings, forecast_history |
+| `src/prices.py` | Live quotes (pluggable yfinance/Finnhub), portfolio P&L + forecast-vs-price math |
 | `src/gemini_client.py` | Gemini API calls with model fallback and context caching |
 | `src/prompts.py` | All prompt templates and builder functions for all modes and agents |
 | `src/agents.py` | 3-agent orchestration: Filter → Analyst → Editor |
