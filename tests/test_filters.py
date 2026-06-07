@@ -80,16 +80,12 @@ class TestSimilar:
 class TestFilterArticles:
     @pytest.fixture(autouse=True)
     def _patch_watchlist(self):
-        """Pin the watchlist so tests don't depend on live DB state (mutable via /add)."""
+        """Pin watchlist so tests don't depend on live DB state."""
         with patch(
             "src.filters.db.get_watchlist",
             return_value={"ai_tech": ["NVDA", "AAPL", "MSFT"]},
         ):
             yield
-
-    def _make_articles(self, specs: list[tuple]) -> list[dict]:
-        """specs: list of (title, link) tuples"""
-        return [_article(title, link=link) for title, link in specs]
 
     def test_blacklisted_article_removed(self):
         articles = [
@@ -131,7 +127,7 @@ class TestFilterArticles:
 
     def test_survivors_marked_seen(self):
         articles = [_article("MSFT earnings beat guidance raised", link="https://a.com/1")]
-        with patch("src.filters.db.is_seen", return_value=False) as mock_seen, \
+        with patch("src.filters.db.is_seen", return_value=False), \
              patch("src.filters.db.mark_seen") as mock_mark:
             filter_articles(articles)
         mock_mark.assert_called_once_with("https://a.com/1")

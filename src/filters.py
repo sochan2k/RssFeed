@@ -65,9 +65,8 @@ def filter_articles(
     mark_seen=False skips recording survivors in the seen_articles table,
     so ondemand/breaking runs don't consume articles for the scheduled digest.
     """
-    # Fetch watchlist once for the entire batch
     watchlist = db.get_watchlist()
-    all_tickers = [t for group in watchlist.values() for t in group]
+    all_tickers = list({t for group in watchlist.values() for t in group})
 
     # Layer 1
     after_l1 = []

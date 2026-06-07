@@ -14,7 +14,6 @@ HELP_TEXT = (
     "/summary — สรุปตลาดฉบับเต็ม (ทุก watchlist)\n"
     "/summary &lt;ticker|category&gt; — สรุปแบบกรอง\n"
     "  เช่น <code>/summary NVDA</code> หรือ <code>/summary ai_tech</code>\n"
-    "/run — สรุปตามตารางฉบับเต็ม (3-agent chain)\n"
     "/breaking — ข่าวด่วน (2 ชม. ล่าสุด)\n"
     "/breaking &lt;hours&gt; — เช่น <code>/breaking 6</code>\n"
     "/ask &lt;question&gt; — ถาม-ตอบการเงินจากข่าววันนี้\n"
@@ -24,13 +23,16 @@ HELP_TEXT = (
     "/add &lt;category&gt; &lt;ticker&gt; — เช่น <code>/add ai_tech MSFT</code>\n"
     "/remove &lt;ticker&gt; — เช่น <code>/remove MSFT</code>\n"
     "\n"
+    "<b>🎯 ติดตามเป้าราคา</b>\n"
+    "/forecast — ดูเป้าราคาทั้งหมดเทียบราคาวันนี้\n"
+    "/forecast &lt;ticker&gt; — ดูประวัติเป้าของ ticker นั้น\n"
+    "/forecast &lt;ticker&gt; &lt;ราคา&gt; — ตั้งเป้าใหม่ เช่น <code>/forecast NVDA 200</code>\n"
+    "\n"
     "<b>ℹ️ ระบบ</b>\n"
     "/history — สรุป 3 ฉบับล่าสุด\n"
     "/history &lt;N&gt; — สรุป N ฉบับล่าสุด เช่น <code>/history 5</code>\n"
-    "/status — การรันล่าสุด\n"
-    "/status &lt;N&gt; — การรัน N ครั้งล่าสุด เช่น <code>/status 5</code>\n"
-    "/health — สถานะระบบ + เวลาสรุปรอบถัดไป\n"
     "/help — แสดงข้อความนี้\n"
+    "<i>ขั้นสูง (ยังใช้ได้): /run · /status · /health</i>\n"
     "\n"
     f"<i>📅 สรุปประจำวันเวลา {DIGEST_SCHEDULE_TIME} {DIGEST_TIMEZONE}</i>"
 )
@@ -98,6 +100,84 @@ def remove_not_found(ticker: str) -> str:
     return f"ไม่พบ {ticker} ใน watchlist"
 
 
+# --- Forecast tracking (HTML) ---
+FORECAST_USAGE = (
+    "วิธีใช้:\n"
+    "/forecast — ดูการคาดการณ์ทั้งหมดเทียบราคาวันนี้\n"
+    "/forecast &lt;ticker&gt; — ดูประวัติเป้าของตัวนั้น\n"
+    "/forecast &lt;ticker&gt; &lt;ราคา&gt; — ตั้งเป้าใหม่ เช่น <code>/forecast NVDA 200</code>"
+)
+FORECAST_EMPTY = (
+    "ยังไม่มีการคาดการณ์ที่บันทึกไว้\n"
+    "ตั้งเป้าด้วย /forecast &lt;ticker&gt; &lt;ราคา&gt; เช่น <code>/forecast NVDA 200</code>"
+)
+FORECAST_OVERVIEW_HEADER = "<b>🎯 การคาดการณ์ที่ติดตามอยู่</b>"
+
+
+def forecast_ticker_header(ticker: str) -> str:
+    return f"<b>🎯 ประวัติเป้าราคา {ticker}</b>"
+
+
+def forecast_empty_ticker(ticker: str) -> str:
+    return f"ไม่มีเป้าราคาที่บันทึกไว้สำหรับ {ticker}"
+
+
+def forecast_set_success(ticker: str, target: float, base: float | None, inserted: bool) -> str:
+    if not inserted:
+        return f"เป้า {ticker} ที่ ${target:g} มีบันทึกอยู่แล้ว (ไม่บันทึกซ้ำ)"
+    msg = f"✅ บันทึกเป้า <b>{ticker}</b> ที่ <b>${target:g}</b>"
+    if base is not None:
+        gap = (target - base) / base if base else None
+        msg += f" (ราคาฐานวันนี้ ${base:,.2f}"
+        if gap is not None:
+            msg += f", upside {gap:+.1%}"
+        msg += ")"
+    else:
+        msg += " <i>(ไม่มีราคาฐาน — ดึงราคาไม่ได้)</i>"
+    return msg
+
+
+def _forecast_status_phrase(s: dict) -> str:
+    if s.get("current_price") is None:
+        return "<i>ไม่มีราคาล่าสุด</i>"
+    if s.get("reached"):
+        return "ถึงเป้าแล้ว ✓"
+    prog = s.get("progress")
+    gap = s.get("gap_to_target")
+    if prog is not None and prog >= 0.9:
+        return f"ใกล้เป้า (เหลือ {gap:+.1%})" if gap is not None else "ใกล้เป้า"
+    if gap is not None:
+        return f"เหลืออีก {gap:+.1%}"
+    return ""
+
+
+def forecast_line(s: dict) -> str:
+    """Render one forecast-status row (see prices.compute_forecast_status).
+
+    No leading bullet — callers add structure (timeline vs overview).
+    """
+    src = "เป้าผม" if s["source"] == "user" else "นักวิเคราะห์"
+    if s["source"] == "analyst" and s.get("note"):
+        src += f" {s['note']}"
+    line = f"${s['target_price']:g} <i>({src})</i>"
+    age = s.get("age_days")
+    if age is not None:
+        line += f" ตั้งเมื่อ {age} วันก่อน"
+    base = s.get("base_price")
+    if base is not None:
+        line += f" @ ${base:,.2f}"
+    cur = s.get("current_price")
+    if cur is not None:
+        line += f" → วันนี้ ${cur:,.2f}"
+        prog = s.get("progress")
+        if prog is not None:
+            line += f" | วิ่งไป {prog:.0%}"
+    phrase = _forecast_status_phrase(s)
+    if phrase:
+        line += f" | {phrase}"
+    return line
+
+
 # --- History / status ---
 HISTORY_EMPTY = "ยังไม่มีประวัติสรุป\nใช้ /run เพื่อสร้างสรุปตามตารางฉบับแรก"
 STATUS_NO_RUNS = "ยังไม่มีการรันที่บันทึกไว้"
@@ -145,17 +225,18 @@ def scheduler_alert(exc: object) -> str:
 
 
 # --- BotFather command menu descriptions ---
+# Note: /run, /status, /health are intentionally omitted from this menu to keep
+# the / autocomplete list focused. Their handlers stay registered in
+# telegram_bot.py, so power users can still type them (listed under "ขั้นสูง" in /help).
 BOT_COMMANDS: list[tuple[str, str]] = [
     ("summary", "สรุปตลาดแบบทันที [category|ticker]"),
-    ("run", "สรุปตามตารางฉบับเต็ม (3-agent chain)"),
     ("breaking", "ข่าวด่วน [ชั่วโมง, ค่าเริ่มต้น 2]"),
     ("ask", "ถาม-ตอบการเงินจากข่าววันนี้"),
     ("watchlist", "ดู watchlist ตามหมวด"),
     ("add", "เพิ่ม ticker: /add <category> <ticker>"),
     ("remove", "ลบ ticker: /remove <ticker>"),
+    ("forecast", "ติดตามเป้าราคา [ticker] [ราคา]"),
     ("history", "สรุปล่าสุด [N, ค่าเริ่มต้น 3]"),
-    ("status", "ประวัติการรัน [N, ค่าเริ่มต้น 1]"),
-    ("health", "สถานะระบบ"),
     ("help", "แสดงคำสั่งทั้งหมด"),
 ]
 

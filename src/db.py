@@ -37,6 +37,17 @@ def init_db() -> None:
                 digest_text       TEXT NOT NULL,
                 tickers_mentioned TEXT
             );
+            CREATE TABLE IF NOT EXISTS forecast_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker        TEXT NOT NULL,
+                target_price  REAL NOT NULL,
+                base_price    REAL,
+                source        TEXT NOT NULL,
+                note          TEXT,
+                created_at    TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_ticker
+                ON forecast_history(ticker, created_at);
         """)
         
         # Seed watchlist if empty
@@ -87,6 +98,73 @@ def remove_from_watchlist(ticker: str) -> bool:
     with _conn() as conn:
         cur = conn.execute("DELETE FROM watchlist WHERE ticker = ?", (ticker.upper(),))
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Forecast history (time-stamped price targets — user-set via /forecast + analyst from news)
+# ---------------------------------------------------------------------------
+
+def add_forecast(
+    ticker: str,
+    target_price: float,
+    base_price: float | None = None,
+    source: str = "user",
+    note: str | None = None,
+    dedup_days: int = 7,
+) -> bool:
+    """Log a price forecast. Returns True if inserted, False if deduped.
+
+    Dedup: an identical (ticker, source, target_price) logged within the last
+    `dedup_days` is skipped, so repeated news coverage doesn't spam the history.
+    A genuinely revised target (different number) always inserts.
+    """
+    ticker = ticker.upper()
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=dedup_days)).isoformat()
+    with _conn() as conn:
+        dup = conn.execute(
+            """SELECT 1 FROM forecast_history
+               WHERE ticker = ? AND source = ? AND target_price = ? AND created_at >= ?
+               LIMIT 1""",
+            (ticker, source, target_price, cutoff),
+        ).fetchone()
+        if dup:
+            return False
+        conn.execute(
+            """INSERT INTO forecast_history
+               (ticker, target_price, base_price, source, note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ticker, target_price, base_price, source, note, now.isoformat()),
+        )
+    return True
+
+
+def get_forecasts(ticker: str | None = None, limit: int | None = None) -> list[dict]:
+    """Return forecasts (newest first), optionally filtered to one ticker."""
+    sql = "SELECT * FROM forecast_history"
+    params: list = []
+    if ticker:
+        sql += " WHERE ticker = ?"
+        params.append(ticker.upper())
+    sql += " ORDER BY created_at DESC, id DESC"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def get_latest_forecast(ticker: str, source: str | None = None) -> dict | None:
+    """Return the most recent forecast for a ticker (optionally by source)."""
+    sql = "SELECT * FROM forecast_history WHERE ticker = ?"
+    params: list = [ticker.upper()]
+    if source:
+        sql += " AND source = ?"
+        params.append(source)
+    sql += " ORDER BY created_at DESC, id DESC LIMIT 1"
+    with _conn() as conn:
+        row = conn.execute(sql, params).fetchone()
+        return dict(row) if row else None
 
 
 def url_hash(url: str) -> str:

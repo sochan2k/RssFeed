@@ -228,6 +228,58 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(S.remove_not_found(ticker))
 
 
+async def cmd_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Track price forecasts vs. today's price.
+
+    /forecast                  → overview: latest forecast per ticker vs today
+    /forecast NVDA             → full target history for NVDA vs today
+    /forecast NVDA 200         → log a new user target of $200 (base = today's price)
+    """
+    from src import db
+    from src.prices import compute_forecast_status, get_quotes, status_for_forecasts
+    db.init_db()
+    args = context.args or []
+
+    # --- set form: /forecast TICKER PRICE ---
+    if len(args) >= 2:
+        ticker = args[0].upper()
+        try:
+            target = float(args[1])
+        except ValueError:
+            await update.message.reply_html(S.FORECAST_USAGE)
+            return
+        base = (await get_quotes([ticker])).get(ticker)
+        inserted = db.add_forecast(ticker, target, base_price=base, source="user")
+        await update.message.reply_html(S.forecast_set_success(ticker, target, base, inserted))
+        return
+
+    # --- timeline for one ticker: /forecast TICKER ---
+    if len(args) == 1:
+        ticker = args[0].upper()
+        rows = db.get_forecasts(ticker=ticker)
+        if not rows:
+            await update.message.reply_html(S.forecast_empty_ticker(ticker))
+            return
+        statuses = await status_for_forecasts(rows)
+        lines = [S.forecast_ticker_header(ticker)]
+        lines.extend("• " + S.forecast_line(s) for s in statuses)
+        await update.message.reply_html("\n".join(lines))
+        return
+
+    # --- overview: latest forecast per ticker ---
+    rows = db.get_forecasts()
+    if not rows:
+        await update.message.reply_html(S.FORECAST_EMPTY)
+        return
+    latest_by_ticker: dict[str, dict] = {}
+    for r in rows:  # rows are newest-first; first seen per ticker is the latest
+        latest_by_ticker.setdefault(r["ticker"], r)
+    statuses = await status_for_forecasts(list(latest_by_ticker.values()))
+    lines = [S.FORECAST_OVERVIEW_HEADER]
+    lines.extend(f"<b>{s['ticker']}</b> — " + S.forecast_line(s) for s in statuses)
+    await update.message.reply_html("\n".join(lines))
+
+
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src import db
     db.init_db()
@@ -380,6 +432,7 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("remove", cmd_remove))
+    app.add_handler(CommandHandler("forecast", cmd_forecast))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))

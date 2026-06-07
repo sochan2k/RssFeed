@@ -78,6 +78,15 @@ HEADLINE_SIMILARITY_THRESHOLD: float = 0.80
 AI_RELEVANCE_SCORE_THRESHOLD: int = 7
 DB_RETENTION_DAYS: int = 90
 
+# --- Price data (for forecast comparison) ---
+# Provider for live quotes. "yfinance" needs no API key. Set FINNHUB_API_KEY and
+# PRICE_PROVIDER=finnhub in .env to use Finnhub instead.
+PRICE_PROVIDER: str = os.environ.get("PRICE_PROVIDER", "yfinance").strip().lower()
+FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "").strip()
+# Quotes are cached in-memory for this many seconds to avoid hammering the API
+# when /forecast is called repeatedly.
+PRICE_CACHE_TTL_SECONDS: int = int(os.environ.get("PRICE_CACHE_TTL_SECONDS", "60"))
+
 # --- Scheduler ---
 # Daily digest time in DIGEST_TIMEZONE. Override via .env: DIGEST_SCHEDULE_TIME=18:30
 DIGEST_SCHEDULE_TIME: str = os.environ.get("DIGEST_SCHEDULE_TIME", "08:00")

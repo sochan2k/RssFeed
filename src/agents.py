@@ -9,11 +9,13 @@ from src.config import (
 from src.gemini_client import generate
 from src.prompts import (
     ANALYST_AGENT_SYSTEM,
+    TARGET_EXTRACTOR_SYSTEM,
     build_analyst_prompt,
     build_editor_prompt,
     build_editor_system,
     build_filter_prompt,
     build_filter_system,
+    build_target_extractor_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,9 +60,47 @@ async def run_filter_agent(articles: list[dict]) -> list[dict]:
         return articles
 
 
-async def run_analyst_agent(articles: list[dict]) -> str:
+async def run_target_extractor(articles: list[dict]) -> list[dict]:
+    """Extract explicit analyst price targets from articles.
+
+    Returns a list of {"ticker","target","firm"}. Returns [] on parse error or
+    when no explicit target is stated (the prompt enforces no-invention). Mirrors
+    run_filter_agent: JSON output, low temperature, no cache.
+    """
+    if not articles:
+        return []
+    prompt = build_target_extractor_prompt(articles)
+    raw = await generate(
+        prompt,
+        system_prompt=TARGET_EXTRACTOR_SYSTEM,
+        use_cache=False,
+        response_mime_type="application/json",
+        temperature=GEMINI_TEMPERATURE_FILTER,
+    )
+    try:
+        items = json.loads(raw)
+        out = [
+            {"ticker": str(it["ticker"]).upper(),
+             "target": float(it["target"]),
+             "firm": str(it.get("firm", "")).strip()}
+            for it in items
+            if isinstance(it, dict)
+            and it.get("ticker")
+            and isinstance(it.get("target"), (int, float))
+        ]
+        logger.info("Target extractor: %d articles → %d targets", len(articles), len(out))
+        return out
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning("Target extractor parse error (%s) — skipping", exc)
+        return []
+
+
+async def run_analyst_agent(
+    articles: list[dict],
+    forecasts: list[dict] | None = None,
+) -> str:
     """Generate structured plain-text market analysis from high-impact articles."""
-    prompt = build_analyst_prompt(articles)
+    prompt = build_analyst_prompt(articles, forecasts=forecasts)
     return await generate(
         prompt,
         system_prompt=ANALYST_AGENT_SYSTEM,
