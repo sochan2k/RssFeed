@@ -11,13 +11,13 @@ from src.config import GEMINI_TEMPERATURE_ANALYSIS
 from src.feeds import fetch_articles
 from src.filters import filter_articles
 from src.gemini_client import generate
-from src.prices import enrich_holdings, get_quotes, status_for_forecasts
+from src.prices import get_quotes, status_for_forecasts
 from src.prompts import build_prompt, build_system_prompt
 
 logger = logging.getLogger(__name__)
 
 
-async def _run_agent_chain(articles: list[dict], holdings: list[dict] | None = None) -> str:
+async def _run_agent_chain(articles: list[dict]) -> str:
     """
     3-agent scheduled digest path:
       Filter Agent  → score & prune to high-impact articles
@@ -43,15 +43,15 @@ async def _run_agent_chain(articles: list[dict], holdings: list[dict] | None = N
     except Exception as exc:  # extraction must never break the digest
         logger.warning("Target extraction failed: %s", exc)
 
-    # Build forecast context for held tickers: compare past targets to today.
-    held_forecasts = [
-        fc for h in (holdings or [])
-        if (fc := db.get_latest_forecast(h["ticker"]))
-    ]
-    forecasts = await status_for_forecasts(held_forecasts) if held_forecasts else []
+    # Build forecast context: compare tracked forecasts to today's prices.
+    all_forecasts = db.get_forecasts(limit=20)
+    latest_by_ticker: dict[str, dict] = {}
+    for fc in all_forecasts:
+        latest_by_ticker.setdefault(fc["ticker"], fc)
+    forecasts = await status_for_forecasts(list(latest_by_ticker.values())) if latest_by_ticker else []
 
     logger.info("Agent chain: starting analyst agent (%d articles)", len(high_impact))
-    analysis = await run_analyst_agent(high_impact, holdings=holdings, forecasts=forecasts)
+    analysis = await run_analyst_agent(high_impact, forecasts=forecasts)
 
     logger.info("Agent chain: starting editor agent (history=%d)", len(history))
     return await run_editor_agent(analysis, history=history)
@@ -75,7 +75,6 @@ async def run(
     db.init_db()
     db.cleanup_old()
 
-    holdings = await enrich_holdings(db.get_holdings())
     articles = await fetch_articles(hours_back=hours_back)
 
     if not articles:
@@ -94,10 +93,10 @@ async def run(
 
     try:
         if mode == "scheduled":
-            summary = await _run_agent_chain(filtered, holdings=holdings)
+            summary = await _run_agent_chain(filtered)
             db.save_digest("scheduled", summary)
         else:
-            prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target, holdings=holdings)
+            prompt = build_prompt(filtered, mode=mode, hours_back=hours_back, target=target)
             summary = await generate(
                 prompt,
                 system_prompt=build_system_prompt(),

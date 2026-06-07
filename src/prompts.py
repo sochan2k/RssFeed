@@ -26,54 +26,6 @@ def _flat_tickers(watchlist: dict[str, list[str]]) -> str:
     return ", ".join(tickers)
 
 
-# ---------------------------------------------------------------------------
-# Portfolio (holdings) helpers — injected on the USER side to keep the
-# system-prompt context cache stable across portfolio edits.
-# ---------------------------------------------------------------------------
-
-_PORTFOLIO_BLOCK_TEMPLATE = """
-
---- YOUR PORTFOLIO ---
-{holdings}
---- END PORTFOLIO ---"""
-
-
-def _format_holdings(holdings: list[dict]) -> str:
-    """Render holdings as one bullet per position for injection into user prompts.
-
-    Includes live price / unrealized P&L / distance-to-target when the holding
-    has been enriched (see prices.compute_pnl); falls back to cost + expected
-    return otherwise.
-    """
-    lines = []
-    for h in holdings:
-        line = f"• {h['ticker']}: {h['shares']:g} shares @ ${h['avg_cost']:g}"
-        price = h.get("current_price")
-        if price is not None:
-            line += f", now ${price:g}"
-            ur = h.get("unrealized_return")
-            if ur is not None:
-                line += f" ({ur:+.1%} unrealized)"
-        if h.get("target_price") is not None:
-            line += f" → target ${h['target_price']:g}"
-            tt = h.get("to_target")
-            if tt is not None:
-                line += f" ({tt:+.1%} to target)"
-            elif h.get("expected_return") is not None:
-                line += f" (expected return {h['expected_return']:+.1%})"
-        if h.get("note"):
-            line += f" — {h['note']}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _portfolio_block(holdings: list[dict] | None) -> str:
-    """Return the labeled portfolio section, or empty string when no holdings."""
-    if not holdings:
-        return ""
-    return _PORTFOLIO_BLOCK_TEMPLATE.format(holdings=_format_holdings(holdings))
-
-
 _FORECAST_BLOCK_TEMPLATE = """
 
 --- FORECAST TRACKING ---
@@ -182,12 +134,7 @@ CONTENT RULES:
    (priced in — limited further move) and say which. If the article does NOT
    provide the consensus figure, do NOT guess what was expected and do NOT
    assert it is priced in — report the fact neutrally.
-9. PORTFOLIO: If a "YOUR PORTFOLIO" section is provided, add a section headed
-   <b>💼 พอร์ตของคุณ</b>. For each holding mentioned in the news, state whether the
-   development supports or threatens the position relative to its target price,
-   and restate the holding's expected return. Omit this section entirely if no
-   portfolio is provided or none of the holdings appear in today's news.
-10. FORECAST TRACKING: If a "FORECAST TRACKING" section is provided and today's
+9. FORECAST TRACKING: If a "FORECAST TRACKING" section is provided and today's
    news relates to a tracked ticker, note how close the price is to the forecast
    using ONLY the supplied figures (e.g. "ราคาวิ่งไปแล้ว 94% ของเป้า $200 ที่ตั้งไว้").
    Do NOT invent or adjust targets. "Near target" is a distance fact, not proof a
@@ -279,13 +226,12 @@ def build_prompt(
     mode: str = "scheduled",
     hours_back: int | None = None,
     target: str | None = None,
-    holdings: list[dict] | None = None,
     forecasts: list[dict] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     date = _thai_date(now)
     articles_block = _format_articles(articles)
-    extras = _portfolio_block(holdings) + _forecast_block(forecasts)
+    extras = _forecast_block(forecasts)
 
     if mode == "breaking":
         return BREAKING_PROMPT_TEMPLATE.format(
@@ -426,12 +372,7 @@ QUALITY BAR:
   expected (priced in) and say which. If no consensus figure is given, do NOT
   invent what was expected — state the fact neutrally.
 
-PORTFOLIO IMPACT:
-- If a "YOUR PORTFOLIO" section is supplied with the articles, add a section
-  labeled "PORTFOLIO IMPACT:" listing each held ticker that appears in today's
-  news. For each, say whether the development supports or threatens the position
-  relative to its target price, and restate its expected return. Omit the
-  section entirely when no portfolio is given or no holding appears in the news.
+FORECAST TRACKING:
 - If a "FORECAST TRACKING" section is supplied and today's news relates to a
   tracked ticker, add the supplied distance figure (e.g. "price is 94% of the
   way to the $200 target set 90d ago"). Use only the given numbers; never invent
@@ -466,11 +407,6 @@ Required structure — use exactly these Thai section headers:
 
 <b>⚠️ จับตาวันพรุ่งนี้</b>
 [one sentence]
-
-If — and only if — the analysis contains a "PORTFOLIO IMPACT:" section, render
-it last under this exact header (otherwise omit it entirely):
-<b>💼 พอร์ตของคุณ</b>
-• TICKER ⭐: supports/threatens the position vs. target — expected return +X%
 
 PRESENTATION:
 • Lead with the single biggest market mover.
@@ -529,7 +465,6 @@ def build_filter_prompt(articles: list[dict]) -> str:
 
 def build_analyst_prompt(
     articles: list[dict],
-    holdings: list[dict] | None = None,
     forecasts: list[dict] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
@@ -538,7 +473,7 @@ def build_analyst_prompt(
         date=date,
         n=len(articles),
         articles=_format_articles(articles),
-    ) + _portfolio_block(holdings) + _forecast_block(forecasts)
+    ) + _forecast_block(forecasts)
 
 
 def _format_history(history: list[dict]) -> str:

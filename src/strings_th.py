@@ -23,18 +23,16 @@ HELP_TEXT = (
     "/add &lt;category&gt; &lt;ticker&gt; — เช่น <code>/add ai_tech MSFT</code>\n"
     "/remove &lt;ticker&gt; — เช่น <code>/remove MSFT</code>\n"
     "\n"
-    "<b>💼 พอร์ต</b>\n"
-    "/portfolio — ดูสถานะที่ถือ + ผลตอบแทนคาดหวัง\n"
-    "/buy &lt;ticker&gt; &lt;จำนวน&gt; &lt;ต้นทุน&gt; [เป้าหมาย] — เช่น <code>/buy NVDA 10 120 200</code>\n"
-    "/sell &lt;ticker&gt; — เช่น <code>/sell NVDA</code>\n"
-    "/forecast — เทียบเป้าที่เคยตั้งกับราคาวันนี้\n"
-    "/forecast &lt;ticker&gt; [ราคา] — ดูประวัติ/ตั้งเป้า เช่น <code>/forecast NVDA 200</code>\n"
+    "<b>🎯 ติดตามเป้าราคา</b>\n"
+    "/forecast — ดูเป้าราคาทั้งหมดเทียบราคาวันนี้\n"
+    "/forecast &lt;ticker&gt; — ดูประวัติเป้าของ ticker นั้น\n"
+    "/forecast &lt;ticker&gt; &lt;ราคา&gt; — ตั้งเป้าใหม่ เช่น <code>/forecast NVDA 200</code>\n"
     "\n"
     "<b>ℹ️ ระบบ</b>\n"
     "/history — สรุป 3 ฉบับล่าสุด\n"
     "/history &lt;N&gt; — สรุป N ฉบับล่าสุด เช่น <code>/history 5</code>\n"
     "/help — แสดงข้อความนี้\n"
-    "<i>ขั้นสูง (ยังใช้ได้): /run (สรุป 3-agent ฉบับเต็ม) · /status (ประวัติการรัน) · /health (สถานะระบบ)</i>\n"
+    "<i>ขั้นสูง (ยังใช้ได้): /run · /status · /health</i>\n"
     "\n"
     f"<i>📅 สรุปประจำวันเวลา {DIGEST_SCHEDULE_TIME} {DIGEST_TIMEZONE}</i>"
 )
@@ -100,79 +98,6 @@ def remove_success(ticker: str) -> str:
 
 def remove_not_found(ticker: str) -> str:
     return f"ไม่พบ {ticker} ใน watchlist"
-
-
-# --- Portfolio / holdings (HTML) ---
-BUY_USAGE = (
-    "วิธีใช้: /buy &lt;ticker&gt; &lt;จำนวนหุ้น&gt; &lt;ต้นทุนต่อหุ้น&gt; [ราคาเป้าหมาย]\n"
-    "ตัวอย่าง: <code>/buy NVDA 10 120 200</code>"
-)
-SELL_USAGE = "วิธีใช้: /sell &lt;ticker&gt;\nตัวอย่าง: <code>/sell NVDA</code>"
-PORTFOLIO_EMPTY = "พอร์ตว่างเปล่า\nใช้ /buy &lt;ticker&gt; &lt;จำนวนหุ้น&gt; &lt;ต้นทุน&gt; [เป้าหมาย] เพื่อเพิ่มสถานะ"
-PORTFOLIO_HEADER = "<b>💼 พอร์ตของคุณ</b>"
-
-
-def buy_success(ticker: str, shares: float, cost: float, target: float | None, exp_return: float | None) -> str:
-    msg = f"✅ บันทึก <b>{ticker}</b>: {shares:g} หุ้น @ ${cost:g}"
-    if target is not None:
-        msg += f" → เป้าหมาย ${target:g}"
-        if exp_return is not None:
-            msg += f" (ผลตอบแทนคาดหวัง {exp_return:+.1%})"
-    return msg
-
-
-def portfolio_line(h: dict) -> str:
-    """Render one enriched holding (see prices.compute_pnl) as a portfolio bullet."""
-    line = f"• <b>{h['ticker']}</b>: {h['shares']:g} หุ้น @ ${h['avg_cost']:,.2f}"
-    price = h.get("current_price")
-    if price is not None:
-        line += f" → <b>${price:,.2f}</b>"
-        ur = h.get("unrealized_return")
-        pl = h.get("unrealized_pl")
-        if ur is not None:
-            line += f" | กำไร/ขาดทุน <b>{ur:+.1%}</b>"
-        if pl is not None:
-            line += f" ({pl:+,.0f}$)"
-    target = h.get("target_price")
-    if target is not None:
-        line += f" | เป้า ${target:,.2f}"
-        tt = h.get("to_target")
-        if tt is not None:
-            line += f" (เหลืออีก {tt:+.1%})"
-        elif h.get("expected_return") is not None:
-            line += f" (คาดหวัง {h['expected_return']:+.1%})"
-    else:
-        line += " | <i>ยังไม่ตั้งเป้า</i>"
-    w = h.get("weight")
-    if w is not None:
-        line += f" | น้ำหนัก {w:.0%}"
-    if price is None:
-        line += " <i>(ไม่มีราคาล่าสุด)</i>"
-    return line
-
-
-def portfolio_totals(holdings: list[dict]) -> str:
-    """Render the portfolio total / P&L footer from enriched holdings."""
-    cost_all = sum(h["cost_basis"] for h in holdings)
-    priced = [h for h in holdings if h.get("market_value") is not None]
-    if not priced:
-        return f"<b>รวมต้นทุน:</b> ${cost_all:,.0f} <i>(ไม่มีราคาล่าสุด)</i>"
-    mv = sum(h["market_value"] for h in priced)
-    cost_priced = sum(h["cost_basis"] for h in priced)
-    pl = mv - cost_priced
-    pct = pl / cost_priced if cost_priced else 0
-    line = f"<b>รวม:</b> มูลค่า ${mv:,.0f} | ต้นทุน ${cost_priced:,.0f} | P/L <b>{pl:+,.0f}$</b> ({pct:+.1%})"
-    if len(priced) < len(holdings):
-        line += f" <i>(จาก {len(priced)}/{len(holdings)} สถานะที่มีราคา)</i>"
-    return line
-
-
-def sell_success(ticker: str) -> str:
-    return f"ลบ {ticker} ออกจากพอร์ตแล้ว"
-
-
-def sell_not_found(ticker: str) -> str:
-    return f"ไม่พบ {ticker} ในพอร์ต"
 
 
 # --- Forecast tracking (HTML) ---
@@ -310,10 +235,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("watchlist", "ดู watchlist ตามหมวด"),
     ("add", "เพิ่ม ticker: /add <category> <ticker>"),
     ("remove", "ลบ ticker: /remove <ticker>"),
-    ("portfolio", "ดูพอร์ต + ผลตอบแทนคาดหวัง"),
-    ("buy", "เพิ่มสถานะ: /buy <ticker> <จำนวน> <ต้นทุน> [เป้าหมาย]"),
-    ("sell", "ลบสถานะ: /sell <ticker>"),
-    ("forecast", "เทียบเป้าที่ตั้งไว้กับราคาวันนี้ [ticker] [ราคา]"),
+    ("forecast", "ติดตามเป้าราคา [ticker] [ราคา]"),
     ("history", "สรุปล่าสุด [N, ค่าเริ่มต้น 3]"),
     ("help", "แสดงคำสั่งทั้งหมด"),
 ]

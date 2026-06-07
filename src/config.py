@@ -77,17 +77,14 @@ BREAKING_NEWS_HOURS: int = 2
 HEADLINE_SIMILARITY_THRESHOLD: float = 0.80
 AI_RELEVANCE_SCORE_THRESHOLD: int = 7
 DB_RETENTION_DAYS: int = 90
-# Extra heuristic score added per article mention of a ticker the user holds,
-# so position-relevant news outranks generic watchlist news.
-HELD_TICKER_SCORE_BOOST: int = 2
 
-# --- Price data (for portfolio P&L) ---
+# --- Price data (for forecast comparison) ---
 # Provider for live quotes. "yfinance" needs no API key. Set FINNHUB_API_KEY and
 # PRICE_PROVIDER=finnhub in .env to use Finnhub instead.
 PRICE_PROVIDER: str = os.environ.get("PRICE_PROVIDER", "yfinance").strip().lower()
 FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "").strip()
 # Quotes are cached in-memory for this many seconds to avoid hammering the API
-# when /portfolio is called repeatedly.
+# when /forecast is called repeatedly.
 PRICE_CACHE_TTL_SECONDS: int = int(os.environ.get("PRICE_CACHE_TTL_SECONDS", "60"))
 
 # --- Scheduler ---

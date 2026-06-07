@@ -1,8 +1,8 @@
-"""Live quote fetching + portfolio P&L enrichment.
+"""Live quote fetching and forecast comparison.
 
 Pluggable provider (default: yfinance, no API key). Everything degrades
-gracefully: if a quote can't be fetched the holding is returned with price
-fields set to None, so /portfolio and the digest still work offline.
+gracefully: if a quote can't be fetched, price fields are None so /forecast
+still works offline.
 """
 import asyncio
 import logging
@@ -113,54 +113,6 @@ async def get_quotes(tickers: list[str]) -> dict[str, float]:
         fresh.update({t.upper(): p for t, p in fetched.items()})
 
     return fresh
-
-
-def compute_pnl(holdings: list[dict], quotes: dict[str, float]) -> list[dict]:
-    """Enrich holdings with live P&L fields from a quotes dict (pure, testable).
-
-    Adds per holding: current_price, market_value, cost_basis, unrealized_pl,
-    unrealized_return, to_target (remaining % move to target), weight
-    (share of total portfolio value). Price-derived fields are None when the
-    quote is missing; weight falls back to cost basis so weights still sum ~1.
-    """
-    enriched = []
-    for h in holdings:
-        e = dict(h)
-        shares, cost = h["shares"], h["avg_cost"]
-        target = h.get("target_price")
-        cost_basis = shares * cost
-        price = quotes.get(h["ticker"].upper())
-
-        e["cost_basis"] = cost_basis
-        if price is not None:
-            mkt = shares * price
-            e["current_price"] = price
-            e["market_value"] = mkt
-            e["unrealized_pl"] = mkt - cost_basis
-            e["unrealized_return"] = (price - cost) / cost if cost else None
-            e["to_target"] = (target - price) / price if target is not None and price else None
-            e["_weight_value"] = mkt
-        else:
-            e["current_price"] = None
-            e["market_value"] = None
-            e["unrealized_pl"] = None
-            e["unrealized_return"] = None
-            e["to_target"] = None
-            e["_weight_value"] = cost_basis
-        enriched.append(e)
-
-    total = sum(e["_weight_value"] for e in enriched)
-    for e in enriched:
-        e["weight"] = e.pop("_weight_value") / total if total else None
-    return enriched
-
-
-async def enrich_holdings(holdings: list[dict]) -> list[dict]:
-    """Fetch quotes for the holdings and return them enriched with P&L fields."""
-    if not holdings:
-        return []
-    quotes = await get_quotes([h["ticker"] for h in holdings])
-    return compute_pnl(holdings, quotes)
 
 
 # ---------------------------------------------------------------------------
