@@ -68,6 +68,84 @@ def _forecast_block(forecasts: list[dict] | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Market data helpers (live price action + fundamentals per ticker)
+# ---------------------------------------------------------------------------
+
+_MARKET_BLOCK_TEMPLATE = """
+
+--- MARKET DATA (live, use to explain moves; do not invent figures) ---
+{market}
+--- END MARKET DATA ---"""
+
+
+def _fmt_pct(v: float | None) -> str | None:
+    return f"{v:+.1%}" if v is not None else None
+
+
+def _fmt_mcap(v: float | None) -> str | None:
+    if v is None:
+        return None
+    if v >= 1e12:
+        return f"${v / 1e12:.2f}T"
+    if v >= 1e9:
+        return f"${v / 1e9:.1f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.0f}M"
+    return f"${v:,.0f}"
+
+
+def _format_market(snapshots: dict[str, dict]) -> str:
+    """Render one compact line per ticker from market_data.get_market_snapshot."""
+    lines = []
+    for tk in sorted(snapshots):
+        s = snapshots[tk]
+        parts: list[str] = []
+        price = s.get("price")
+        if price is not None:
+            parts.append(f"${price:,.2f}")
+        moves = []
+        for label, key in (("1d", "chg_1d"), ("5d", "chg_5d"), ("1mo", "chg_1mo")):
+            p = _fmt_pct(s.get(key))
+            if p is not None:
+                moves.append(f"{p} {label}")
+        if moves:
+            parts.append("(" + ", ".join(moves) + ")")
+        rv = s.get("rel_volume")
+        if rv is not None:
+            parts.append(f"vol {rv:.1f}× avg")
+        mcap = _fmt_mcap(s.get("market_cap"))
+        if mcap is not None:
+            parts.append(f"mcap {mcap}")
+        pe_bits = []
+        if s.get("pe_trailing") is not None:
+            pe_bits.append(f"{s['pe_trailing']:.0f}x")
+        if s.get("pe_forward") is not None:
+            pe_bits.append(f"fwd {s['pe_forward']:.0f}x")
+        if pe_bits:
+            parts.append("P/E " + " ".join(pe_bits))
+        hi, lo = s.get("wk52_high"), s.get("wk52_low")
+        if hi is not None and lo is not None:
+            parts.append(f"52w {lo:g}–{hi:g}")
+        ed = s.get("earnings_in_days")
+        if ed is not None:
+            if ed > 0:
+                parts.append(f"earnings in {ed}d")
+            elif ed == 0:
+                parts.append("earnings today")
+            else:
+                parts.append(f"earnings {abs(ed)}d ago")
+        lines.append(f"• {tk}: " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+def _market_block(snapshots: dict[str, dict] | None) -> str:
+    """Return the labeled market-data section, or empty string when none."""
+    if not snapshots:
+        return ""
+    return _MARKET_BLOCK_TEMPLATE.format(market=_format_market(snapshots))
+
+
+# ---------------------------------------------------------------------------
 # Thai localization helpers
 # ---------------------------------------------------------------------------
 
@@ -139,6 +217,13 @@ CONTENT RULES:
    using ONLY the supplied figures (e.g. "ราคาวิ่งไปแล้ว 94% ของเป้า $200 ที่ตั้งไว้").
    Do NOT invent or adjust targets. "Near target" is a distance fact, not proof a
    move is priced in — only call something priced in under the rule-8 condition.
+10. EXPLAIN THE MOVE: When a "MARKET DATA" section and/or an article's FULL TEXT is
+    provided, use them to explain WHY a stock moved — cite the actual price move and
+    relative volume (e.g. "MSFT −4.2% on 1.9× volume") AND the specific figure from
+    the text that drove it (e.g. "Azure growth slowed to +31%", "CapEx guided to
+    $80B"). Connect the data point to the move. Use ONLY supplied or article-quoted
+    numbers — never invent prices, percentages, or fundamentals. If the data isn't
+    provided, describe the news without fabricating figures.
 
 PRIORITY: When space is tight, weight items in this order — monetary policy
 (Fed/FOMC) > broad macro data (CPI, jobs, GDP) > sector/regulatory shifts >
@@ -227,11 +312,12 @@ def build_prompt(
     hours_back: int | None = None,
     target: str | None = None,
     forecasts: list[dict] | None = None,
+    market: dict[str, dict] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     date = _thai_date(now)
     articles_block = _format_articles(articles)
-    extras = _forecast_block(forecasts)
+    extras = _market_block(market) + _forecast_block(forecasts)
 
     if mode == "breaking":
         return BREAKING_PROMPT_TEMPLATE.format(
@@ -263,8 +349,11 @@ def _format_articles(articles: list[dict]) -> str:
             except Exception:
                 pass
 
-        body = f"{title}. {summary}" if summary else title
-        lines.append(f"[{i}] ({source}{age_str}) {body}")
+        head = f"{title}. {summary}" if summary else title
+        lines.append(f"[{i}] ({source}{age_str}) {head}")
+        full = a.get("body")
+        if full:
+            lines.append(f"    FULL TEXT: {full}")
     return "\n".join(lines)
 
 
@@ -378,6 +467,13 @@ FORECAST TRACKING:
   way to the $200 target set 90d ago"). Use only the given numbers; never invent
   a target, and do not equate "near target" with "priced in".
 
+EXPLAIN THE MOVE:
+- When a "MARKET DATA" section and/or an article's FULL TEXT is supplied, use them
+  to explain WHY a stock moved: cite the actual price move + relative volume and the
+  specific driver figure from the text (cloud growth %, CapEx $, margin, guidance).
+  Tie the figure to the move. Use ONLY supplied/quoted numbers — never fabricate
+  prices, percentages, or fundamentals.
+
 Be concise and data-driven. Include ticker symbols. No disclaimers.
 """.strip() + _THAI_DIRECTIVE
 
@@ -466,6 +562,7 @@ def build_filter_prompt(articles: list[dict]) -> str:
 def build_analyst_prompt(
     articles: list[dict],
     forecasts: list[dict] | None = None,
+    market: dict[str, dict] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     date = _thai_date(now)
@@ -473,7 +570,7 @@ def build_analyst_prompt(
         date=date,
         n=len(articles),
         articles=_format_articles(articles),
-    ) + _forecast_block(forecasts)
+    ) + _market_block(market) + _forecast_block(forecasts)
 
 
 def _format_history(history: list[dict]) -> str:
