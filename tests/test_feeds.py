@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import feedparser
 import pytest
 
-from src.feeds import _parse_date, _strip_html, fetch_articles
+from src.feeds import (
+    _extract_body,
+    _parse_date,
+    _strip_html,
+    fetch_article_bodies,
+    fetch_articles,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +138,128 @@ async def test_fetch_articles_failed_feed_skipped():
         articles = await fetch_articles()
 
     assert len(articles) == 1
+
+
+# ---------------------------------------------------------------------------
+# _extract_body — paragraph extraction from HTML
+# ---------------------------------------------------------------------------
+
+class TestExtractBody:
+    def test_extracts_paragraph_text(self):
+        html = (
+            "<html><body>"
+            "<p>Microsoft reported Azure revenue grew 31% year over year, below the "
+            "33% analysts had expected.</p>"
+            "<p>The company also guided capital expenditure to roughly $80 billion "
+            "for the fiscal year, well above prior estimates.</p>"
+            "</body></html>"
+        )
+        body = _extract_body(html)
+        assert "Azure revenue grew 31%" in body
+        assert "$80 billion" in body
+
+    def test_drops_script_and_style(self):
+        html = (
+            "<p>Real content here that is definitely long enough to be kept in body.</p>"
+            "<script>var x = 'tracking pixel garbage should not appear';</script>"
+            "<style>.cls { color: red; }</style>"
+        )
+        body = _extract_body(html)
+        assert "Real content here" in body
+        assert "tracking pixel" not in body
+        assert "color: red" not in body
+
+    def test_truncates_to_max_chars(self):
+        long_para = "<p>" + ("word " * 1000) + "</p>"
+        body = _extract_body(long_para, max_chars=100)
+        assert len(body) <= 101  # 100 + the ellipsis char
+        assert body.endswith("…")
+
+    def test_empty_on_no_paragraphs(self):
+        assert _extract_body("<div>no paragraph tags here</div>") == ""
+
+    def test_malformed_html_does_not_raise(self):
+        # Unclosed tags / garbage must not raise.
+        assert isinstance(_extract_body("<p>unclosed <b>bold text that is long enough"), str)
+
+
+# ---------------------------------------------------------------------------
+# fetch_article_bodies — bounded, mutating, non-raising
+# ---------------------------------------------------------------------------
+
+def _body_html(text: str) -> str:
+    return f"<html><body><p>{text}</p></body></html>"
+
+
+class _FakeResp:
+    def __init__(self, status: int, text: str):
+        self.status = status
+        self._text = text
+
+    async def text(self):
+        return self._text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _FakeSession:
+    """Minimal aiohttp.ClientSession stand-in keyed by URL → (status, html)."""
+
+    def __init__(self, pages: dict):
+        self._pages = pages
+
+    def get(self, url, **kwargs):
+        status, html = self._pages.get(url, (404, ""))
+        return _FakeResp(status, html)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_fetch_article_bodies_attaches_body():
+    articles = [
+        {"title": "MSFT", "link": "https://news/msft"},
+        {"title": "NVDA", "link": "https://news/nvda"},
+    ]
+    pages = {
+        "https://news/msft": (200, _body_html("Azure grew 31% year over year, a slowdown from prior quarters.")),
+        "https://news/nvda": (200, _body_html("Nvidia data center revenue surged on strong AI chip demand worldwide.")),
+    }
+    with patch("src.feeds.aiohttp.ClientSession", return_value=_FakeSession(pages)):
+        await fetch_article_bodies(articles, limit=5)
+
+    assert "Azure grew 31%" in articles[0]["body"]
+    assert "data center revenue surged" in articles[1]["body"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_article_bodies_respects_limit():
+    articles = [{"title": str(i), "link": f"https://news/{i}"} for i in range(5)]
+    pages = {f"https://news/{i}": (200, _body_html("Some sufficiently long article body text here.")) for i in range(5)}
+    with patch("src.feeds.aiohttp.ClientSession", return_value=_FakeSession(pages)):
+        await fetch_article_bodies(articles, limit=2)
+
+    assert articles[0].get("body") and articles[1].get("body")
+    assert all("body" not in a for a in articles[2:])
+
+
+@pytest.mark.asyncio
+async def test_fetch_article_bodies_skips_non_200_and_does_not_raise():
+    articles = [
+        {"title": "ok", "link": "https://news/ok"},
+        {"title": "missing", "link": "https://news/missing"},
+    ]
+    pages = {"https://news/ok": (200, _body_html("A perfectly valid and sufficiently long body of text."))}
+    with patch("src.feeds.aiohttp.ClientSession", return_value=_FakeSession(pages)):
+        await fetch_article_bodies(articles, limit=5)  # missing -> 404
+
+    assert articles[0].get("body")
+    assert "body" not in articles[1]

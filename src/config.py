@@ -87,6 +87,29 @@ FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "").strip()
 # when /forecast is called repeatedly.
 PRICE_CACHE_TTL_SECONDS: int = int(os.environ.get("PRICE_CACHE_TTL_SECONDS", "60"))
 
+# --- Market data enrichment (price move + volume + fundamentals) ---
+# Rich per-ticker snapshots are injected into the analysis prompt so the model
+# can explain *why* a stock moved. All caps are Pi Zero 2 W-safe; lower them or
+# disable article-body fetching if scheduled/breaking runs get too slow.
+# Only watchlist tickers mentioned in the day's surviving articles are fetched,
+# capped to this many to bound latency.
+MARKET_DATA_MAX_TICKERS: int = int(os.environ.get("MARKET_DATA_MAX_TICKERS", "8"))
+# Snapshots (fundamentals barely move intraday) are cached in-memory this long.
+MARKET_SNAPSHOT_CACHE_TTL_SECONDS: int = int(os.environ.get("MARKET_SNAPSHOT_CACHE_TTL_SECONDS", "600"))
+
+# --- Article body fetching ---
+# RSS summaries are usually just the headline; fetching the article body gives the
+# model the real figures (e.g. "Azure +31%, CapEx $80B"). This is the main latency
+# cost on the Pi — set ENABLE_ARTICLE_BODY=false to turn it off entirely.
+ENABLE_ARTICLE_BODY: bool = os.environ.get("ENABLE_ARTICLE_BODY", "true").strip().lower() in ("1", "true", "yes")
+# Fetch bodies only for the top-K highest-impact articles per run.
+ARTICLE_BODY_TOP_K: int = int(os.environ.get("ARTICLE_BODY_TOP_K", "5"))
+# Truncate each extracted body to this many characters before it reaches the prompt.
+ARTICLE_BODY_MAX_CHARS: int = int(os.environ.get("ARTICLE_BODY_MAX_CHARS", "2000"))
+# Per-article fetch timeout (seconds) and how many to fetch concurrently.
+ARTICLE_BODY_FETCH_TIMEOUT: int = int(os.environ.get("ARTICLE_BODY_FETCH_TIMEOUT", "8"))
+ARTICLE_BODY_FETCH_CONCURRENCY: int = int(os.environ.get("ARTICLE_BODY_FETCH_CONCURRENCY", "5"))
+
 # --- Scheduler ---
 # Daily digest time in DIGEST_TIMEZONE. Override via .env: DIGEST_SCHEDULE_TIME=18:30
 DIGEST_SCHEDULE_TIME: str = os.environ.get("DIGEST_SCHEDULE_TIME", "08:00")

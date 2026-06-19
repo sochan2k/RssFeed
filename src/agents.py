@@ -98,9 +98,10 @@ async def run_target_extractor(articles: list[dict]) -> list[dict]:
 async def run_analyst_agent(
     articles: list[dict],
     forecasts: list[dict] | None = None,
+    market: dict[str, dict] | None = None,
 ) -> str:
     """Generate structured plain-text market analysis from high-impact articles."""
-    prompt = build_analyst_prompt(articles, forecasts=forecasts)
+    prompt = build_analyst_prompt(articles, forecasts=forecasts, market=market)
     return await generate(
         prompt,
         system_prompt=ANALYST_AGENT_SYSTEM,
