@@ -24,7 +24,17 @@
       "Bash(git push *)",
       "Bash(python -m pytest --tb=short -q)",
       "Bash(python -c \"from src.db import save_digest, get_recent_digests; from src.prompts import build_editor_prompt; from src.agents import run_editor_agent; print\\('imports OK'\\)\")",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\socha\\\\Downloads\\\\MyApp\\\\RssFeed\" -Recurse -File -Include \"*.py\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "WebSearch",
+      "PowerShell(python --version)",
+      "PowerShell(python -c \"import google.genai; print\\('google-genai', google.genai.__version__\\)\")",
+      "PowerShell(pip index versions google-genai 2>$null)",
+      "PowerShell(python -I \"C:\\\\Users\\\\socha\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-socha--claude-spares-spare-oY30O0\\\\deb5ea17-1f31-4264-951b-03944486cef2\\\\scratchpad\\\\list_models.py\" \"C:\\\\MyApp\\\\RssFeed\\\\.env\" gemini-3.8-flash gemini-3.6-flash gemini-3.5-flash gemini-3.5-flash-lite gemini-3.1-flash-lite gemini-2.5-flash gemini-2.5-flash-lite gemma-4-31b-it gemini-flash-latest)",
+      "PowerShell(python -I \"C:\\\\Users\\\\socha\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-socha--claude-spares-spare-oY30O0\\\\deb5ea17-1f31-4264-951b-03944486cef2\\\\scratchpad\\\\probe_models.py\" \"C:\\\\MyApp\\\\RssFeed\\\\.env\" gemini-3.8-flash gemini-3.6-flash gemini-3.5-flash-lite gemini-3.1-flash-lite gemini-2.5-flash gemini-2.5-flash-lite gemma-4-31b-it)"
     ]
   },
   "skillOverrides": {

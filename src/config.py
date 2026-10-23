@@ -28,14 +28,27 @@ ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", TELEGRAM_CHAT_IDS[0]))
 
 # --- Gemini Model Fallback Chain ---
 # Tried in order; falls back on ResourceExhausted / ServiceUnavailable
-GEMINI_MODELS: list[str] = [
+# Can be overridden via GEMINI_MODELS (comma-separated) or GEMINI_MODEL in .env
+_default_gemini_models = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-3.0-flash",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemma-4-31b-it",
 ]
+_env_models = os.environ.get("GEMINI_MODELS", "").strip()
+_env_single = os.environ.get("GEMINI_MODEL", "").strip()
+
+if _env_models:
+    GEMINI_MODELS: list[str] = [m.strip() for m in _env_models.split(",") if m.strip()]
+elif _env_single:
+    GEMINI_MODELS: list[str] = [_env_single] + [m for m in _default_gemini_models if m != _env_single]
+else:
+    GEMINI_MODELS: list[str] = _default_gemini_models
 
 # --- Generation tuning ---
 # Low temperature for the JSON-scoring filter agent (determinism);

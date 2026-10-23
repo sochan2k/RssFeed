@@ -139,3 +139,10 @@ def test_same_system_prompt_same_cache_key():
     key1 = gc._prompt_key("identical system prompt")
     key2 = gc._prompt_key("identical system prompt")
     assert key1 == key2
+
+
+def test_default_gemini_models_starts_with_flash_38():
+    import src.config as cfg
+    assert cfg.GEMINI_MODELS[0] == 'gemini-3.8-flash'
+    assert 'gemini-3.7-flash' in cfg.GEMINI_MODELS
+    assert 'gemini-3.6-flash' in cfg.GEMINI_MODELS

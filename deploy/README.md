@@ -209,14 +209,24 @@ Then check the Telegram message and logs.
 
 ## Redeploying after code changes
 
-From Windows, repeat Step 1 (rsync), then on the Pi:
+Choose **one** of the following options depending on how you manage your code:
 
+### Option A — Via Git (Recommended if using GitHub)
+For detailed migration steps or if putting your Pi deployment under Git for the first time, see the dedicated [raspberry-pi-git-update.md](../guides/raspberry-pi-git-update.md) guide.
+
+Once configured, updates on the Pi are a one-liner:
 ```bash
-# Restart the bot to pick up code changes
-sudo systemctl restart stock-digest-bot.service
-
-# No action needed for the digest service — it's oneshot and reads code on each run
+cd ~/stock-digest && git pull && sudo systemctl restart stock-digest-bot.service
 ```
+
+### Option B — Via Rsync (From Windows)
+Repeat **Step 1 (Option B — Rsync)** from your Windows machine to sync files, then restart the bot on the Pi:
+```bash
+sudo systemctl restart stock-digest-bot.service
+```
+
+*(Note: No action is needed for the scheduled `stock-digest.service` — it is a one-shot service and reads the updated code from disk automatically on each run.)*
+
 
 ---
 
